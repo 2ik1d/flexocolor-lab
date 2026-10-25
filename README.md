@@ -56,6 +56,8 @@ pnpm preview
 1. Создать на GitHub пустой репозиторий, например `flexocolor-lab`, без автоматического README.
 2. В папке проекта выполнить, подставив свой логин:
 
+В текущей Windows-папке Git обнаружил другого владельца каталога. Если появляется `detected dubious ownership`, можно добавлять точное исключение к каждой команде: `git -c safe.directory="C:/FlexoColor Lab/FlexoColor Lab" remote add origin ...` и аналогично для `push`. Либо после проверки пути однократно разрешить именно этот каталог: `git config --global --add safe.directory "C:/FlexoColor Lab/FlexoColor Lab"`. Глобальное исключение автоматически не добавлялось.
+
 ```sh
 git remote add origin https://github.com/YOUR_LOGIN/flexocolor-lab.git
 git push -u origin main
