@@ -1,0 +1,8 @@
+node_modules/
+.pnpm-store/
+.playwright/
+dist/
+test-results/
+playwright-report/
+*.tsbuildinfo
+.env*

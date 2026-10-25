@@ -1,0 +1,73 @@
+{
+  "format": "FlexoColorLab",
+  "version": 2,
+  "exportedAt": "2026-01-01T00:00:00.000Z",
+  "inks": [
+    {
+      "id": "demo-yellow",
+      "manufacturer": "ТЕСТОВЫЙ производитель",
+      "name": "ТЕСТОВАЯ база A",
+      "code": "DEMO-ONLY",
+      "type": "Синтетические данные",
+      "group": "Тест",
+      "lot": "DEMO",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "notes": "Не реальная краска. Не использовать для производства.",
+      "calibration": []
+    }
+  ],
+  "recipes": [
+    {
+      "id": "demo-recipe-v1",
+      "familyId": "demo-recipe",
+      "version": 1,
+      "name": "ДЕМОНСТРАЦИЯ · не производственная рецептура",
+      "pantone": "НЕ PANTONE · DEMO",
+      "source": "OWN",
+      "sourceNote": "Синтетические данные только для проверки интерфейса",
+      "components": [
+        {
+          "inkId": "demo-yellow",
+          "grams": "1000"
+        }
+      ],
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "batches": [
+    {
+      "id": "demo-batch",
+      "name": "ТЕСТОВАЯ партия · не для производства",
+      "pantone": "DEMO",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "initial": [
+        {
+          "inkId": "demo-yellow",
+          "grams": "1000"
+        }
+      ],
+      "additions": [],
+      "samples": [],
+      "comment": "Синтетический пример. Измерений и рекомендаций нет.",
+      "status": "ACTIVE"
+    }
+  ],
+  "profiles": [],
+  "experiments": [],
+  "photos": [],
+  "settings": [
+    {
+      "id": "settings",
+      "tolerance": null,
+      "profileId": "",
+      "conditions": {
+        "illuminant": "D50",
+        "observer": "2",
+        "geometry": "неизвестна",
+        "mode": "unknown",
+        "setup": "",
+        "whitePoint": "D50"
+      }
+    }
+  ]
+}
