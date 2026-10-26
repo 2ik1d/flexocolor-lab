@@ -123,10 +123,22 @@ export function Batches({
           <div className="stack">
             <section className="card">
               <h3>Текущий состав</h3>
-              <Composition value={cs} inks={props.inks} />
+              <Composition
+                value={cs}
+                inks={props.inks}
+                showPercent={batch.compositionKnown !== false}
+                totalLabel={
+                  batch.compositionKnown === false
+                    ? "Всего известных добавок"
+                    : "Общая масса"
+                }
+              />
               <p className="hint">
-                Исходная масса: {total(batch.initial)} г · добавок:{" "}
-                {batch.additions.length}
+                Исходная масса:{" "}
+                {batch.compositionKnown === false
+                  ? "неизвестна"
+                  : `${total(batch.initial)} г`}{" "}
+                · добавок: {batch.additions.length}
               </p>
               {batch.comment && <p>{batch.comment}</p>}
             </section>
@@ -357,7 +369,11 @@ export function Batches({
             <h3>{b.name}</h3>
             <p>{b.pantone || "Pantone не указан"}</p>
             <div className="record-meta">
-              <strong>{total(composition(b))} г</strong>
+              <strong>
+                {b.compositionKnown === false
+                  ? "Масса неизвестна"
+                  : `${total(composition(b))} г`}
+              </strong>
               <span>
                 {b.samples.length} проб · {b.additions.length} добавок
               </span>

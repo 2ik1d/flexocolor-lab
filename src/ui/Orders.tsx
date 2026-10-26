@@ -1,41 +1,41 @@
 import { useEffect, useState } from "react";
+import { ArrowLeft, FolderOpen, Plus, ArrowRight, Trash2 } from "lucide-react";
 import { useHash } from "./routing";
 import {
-  FolderOpen,
-  Plus,
-  ArrowLeft,
-  ArrowRight,
-  CalendarDays,
-  History,
-  ScanLine,
-} from "lucide-react";
+  db,
+  saveColorReference,
+  ensureWorkingBatch,
+  setColorComposition,
+  addComponents,
+  saveSample,
+} from "../storage/db";
 import {
   id,
   now,
   orderSchema,
   type Order,
+  type OrderColor,
   type Batch,
   type Ink,
   type Settings,
   type Component,
   type Experiment,
-  type OrderReference,
   type Measurement,
 } from "../domain/types";
-import { db, saveOrderReference, createRun } from "../storage/db";
-import { difference } from "../color/color";
 import { composition, total } from "../domain/mixture";
-import { Compare, MeasurementCard, SpectroInput } from "./Compare";
+import { progress } from "../domain/progress";
+import { ReferenceEditor } from "./ReferenceEditor";
 import { PhotoEditor, type PhotoSelection } from "./PhotoEditor";
-import { Batches, SamplePhotos } from "./Records";
+import { MeasurementCard, SpectroInput } from "./Compare";
+import { SamplePhotos } from "./Records";
 import {
   ComponentsEditor,
   Composition,
   Field,
-  Notice,
   date,
   ConditionsEditor,
 } from "./common";
+import { ProgressReport } from "./ProgressReport";
 interface Props {
   orders: Order[];
   batches: Batch[];
@@ -46,53 +46,52 @@ interface Props {
   onError: (s: string) => void;
   onSuccess: (s: string) => void;
 }
-const localDate = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+const newColor = (): OrderColor => ({
+  id: id(),
+  pantone: "",
+  name: "",
+  references: [],
+  currentReferenceId: "",
+});
 export function Orders(props: Props) {
-  const hash = useHash(),
-    path = hash.slice(1).split("/");
+  const path = useHash().slice(1).split("/"),
+    order = props.orders.find((o) => o.id === path[1]);
   const [creating, setCreating] = useState(false),
     [search, setSearch] = useState("");
-  useEffect(() => {
-    setCreating(false);
-  }, [hash]);
-  const order = props.orders.find((o) => o.id === path[1]);
-  const run = order
-    ? props.batches.find((b) => b.id === path[3] && b.orderId === order.id)
-    : undefined;
-  if (order && run)
-    return <RunWorkspace key={run.id} {...props} order={order} run={run} />;
-  if (order) return <OrderDetail key={order.id} {...props} order={order} />;
+  if (order)
+    return (
+      <OrderWorkspace
+        key={order.id}
+        {...props}
+        order={order}
+        selectedId={
+          path[2] === "colors"
+            ? path[3]
+            : props.batches.find((b) => b.id === path[3])?.colorId
+        }
+      />
+    );
   if (path[1])
     return (
       <section className="card">
         <h1>Заказ не найден</h1>
-        <a href="#orders">Вернуться к заказам</a>
+        <a href="#orders">Все заказы</a>
       </section>
     );
   const list = props.orders
     .filter((o) =>
-      `${o.name} ${o.code} ${o.customer} ${o.pantone}`
+      `${o.name} ${o.code} ${o.customer} ${o.colors.map((c) => c.pantone).join(" ")}`
         .toLowerCase()
         .includes(search.toLowerCase()),
     )
-    .sort((a, b) => lastDate(b).localeCompare(lastDate(a)));
-  function lastDate(o: Order) {
-    return props.batches
-      .filter((b) => b.orderId === o.id)
-      .reduce((s, b) => (b.createdAt > s ? b.createdAt : s), o.createdAt);
-  }
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return (
     <>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">РАБОТА ПО ЗАКАЗАМ</div>
+          <div className="eyebrow">FLEXOCOLOR LAB</div>
           <h1>Заказы</h1>
-          <p>
-            Эталон, запуски по сменам и вся история приладки — в одном месте.
-          </p>
+          <p>Выберите заказ и Pantone — продолжайте подбирать цвет.</p>
         </div>
         <button onClick={() => setCreating(!creating)}>
           <Plus size={18} />
@@ -101,154 +100,185 @@ export function Orders(props: Props) {
       </div>
       {creating && (
         <OrderForm
+          onClose={() => setCreating(false)}
+          onError={props.onError}
           onSave={async (values) => {
+            const first = values.colors[0];
             const order = orderSchema.parse({
               id: id(),
               createdAt: now(),
+              pantone: first.pantone,
               references: [],
               currentReferenceId: "",
               ...values,
             });
             await db.orders.add(order);
             props.onChange();
+            setCreating(false);
             location.hash = `orders/${order.id}`;
           }}
-          onError={props.onError}
-          onClose={() => setCreating(false)}
         />
       )}
-      {props.orders.length > 0 && (
+      {!!props.orders.length && (
         <input
           className="search"
           aria-label="Найти заказ"
-          placeholder="Заказ, номер, клиент или Pantone…"
           value={search}
+          placeholder="Заказ, клиент или Pantone…"
           onChange={(e) => setSearch(e.target.value)}
         />
       )}
-      <div className="record-grid order-grid">
-        {list.map((o) => {
-          const runs = props.batches
-            .filter((b) => b.orderId === o.id)
-            .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-          const ref = o.references.find((r) => r.id === o.currentReferenceId);
-          return (
-            <a
-              className="record card order-record"
-              href={`#orders/${o.id}`}
-              key={o.id}
-            >
-              <div className="card-heading">
-                <FolderOpen size={23} />
-                <span className="tag">{o.code || "Без номера"}</span>
-              </div>
-              <h3>{o.name}</h3>
-              <p>
-                {[o.customer, o.pantone].filter(Boolean).join(" · ") ||
-                  "Клиент и Pantone не указаны"}
-              </p>
-              <div className="order-reference-status">
-                {ref ? (
-                  <>
-                    <i
-                      style={{
-                        background: ref.measurement.stats
-                          ? `rgb(${ref.measurement.stats.median.join(",")})`
-                          : "#53615a",
-                      }}
-                    />
-                    Эталон сохранён
-                  </>
-                ) : (
-                  "Нужно добавить эталон"
-                )}
-              </div>
-              <div className="record-meta">
-                <span>
-                  {runs.length} запусков ·{" "}
-                  {runs.reduce((s, b) => s + b.samples.length, 0)} проб
+      <div className="record-grid">
+        {list.map((o) => (
+          <a
+            className="record card order-record"
+            key={o.id}
+            href={`#orders/${o.id}`}
+          >
+            <div className="card-heading">
+              <FolderOpen size={22} />
+              <small>{o.code || "Без номера"}</small>
+            </div>
+            <h3>{o.name}</h3>
+            {o.customer && <p>{o.customer}</p>}
+            <div className="color-list-chips">
+              {o.colors.map((c) => (
+                <span className="tag" key={c.id}>
+                  {c.pantone}
                 </span>
-                <ArrowRight size={18} />
-              </div>
-              <small>
-                {runs[0]
-                  ? `Последний запуск: ${runs[0].runDate || date(runs[0].createdAt)} · ${runs[0].shift || ""}`
-                  : "Запусков ещё не было"}
-              </small>
-            </a>
-          );
-        })}
+              ))}
+            </div>
+            <div className="record-meta">
+              <span>
+                Проб:{" "}
+                {props.batches
+                  .filter((b) => b.orderId === o.id)
+                  .reduce((sum, b) => sum + b.samples.length, 0)}
+              </span>
+              <ArrowRight size={18} />
+            </div>
+          </a>
+        ))}
       </div>
       {!props.orders.length && !creating && (
         <section className="card empty-state">
-          <FolderOpen size={42} />
-          <h3>Один заказ — одна история цвета</h3>
+          <FolderOpen size={40} />
+          <h3>С какого заказа начнём?</h3>
           <p>
-            Сохраните эталон один раз. Когда заказ повторится, начните новый
-            запуск с фактическим составом краски на эту смену.
+            В одном заказе можно добавить сразу несколько Pantone. У каждого
+            будет свой эталон, краска и история проб.
           </p>
-          <button onClick={() => setCreating(true)}>
-            Создать первый заказ
-          </button>
+          <button onClick={() => setCreating(true)}>Создать заказ</button>
         </section>
       )}
-      {props.orders.length > 0 && !list.length && <p>Заказы не найдены.</p>}
     </>
   );
 }
+type OrderFields = Pick<
+  Order,
+  "name" | "code" | "customer" | "notes" | "colors"
+>;
 function OrderForm({
   order,
   onSave,
-  onClose,
   onError,
+  onClose,
 }: {
   order?: Order;
-  onSave: (
-    v: Pick<Order, "name" | "code" | "customer" | "pantone" | "notes">,
-  ) => Promise<void>;
-  onClose: () => void;
+  onSave: (v: OrderFields) => Promise<void>;
   onError: (s: string) => void;
+  onClose: () => void;
 }) {
-  const [values, setValues] = useState({
-      name: order?.name || "",
-      code: order?.code || "",
-      customer: order?.customer || "",
-      pantone: order?.pantone || "",
-      notes: order?.notes || "",
-    }),
+  const [name, setName] = useState(order?.name || ""),
+    [code, setCode] = useState(order?.code || ""),
+    [customer, setCustomer] = useState(order?.customer || ""),
+    [colors, setColors] = useState<OrderColor[]>(
+      order?.colors.map((c) => ({ ...c })) || [newColor()],
+    ),
     [busy, setBusy] = useState(false);
   return (
-    <section className="card">
-      <h3>{order ? "Карточка заказа" : "Новый заказ"}</h3>
+    <section className="card order-form">
+      <h3>{order ? "Заказ и его Pantone" : "Новый заказ"}</h3>
+      <Field label="Название заказа">
+        <input value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
       <div className="form-grid">
-        {(["name", "code", "customer", "pantone"] as const).map((k, i) => (
-          <Field
-            key={k}
-            label={
-              ["Название заказа", "Номер заказа", "Клиент", "Pantone заказа"][i]
-            }
-          >
+        <Field label="Номер заказа">
+          <input value={code} onChange={(e) => setCode(e.target.value)} />
+        </Field>
+        <Field label="Клиент">
+          <input
+            value={customer}
+            onChange={(e) => setCustomer(e.target.value)}
+          />
+        </Field>
+      </div>
+      <h4>Pantone в заказе</h4>
+      {colors.map((c, i) => (
+        <div className="pantone-edit-row" key={c.id}>
+          <Field label={`Pantone ${i + 1}`}>
             <input
-              value={values[k]}
-              onChange={(e) => setValues({ ...values, [k]: e.target.value })}
+              placeholder="185 C"
+              value={c.pantone}
+              onChange={(e) =>
+                setColors((cs) =>
+                  cs.map((v) =>
+                    v.id === c.id ? { ...v, pantone: e.target.value } : v,
+                  ),
+                )
+              }
             />
           </Field>
-        ))}
-      </div>
-      <Field label="Примечание к заказу">
-        <textarea
-          value={values.notes}
-          onChange={(e) => setValues({ ...values, notes: e.target.value })}
-        />
-      </Field>
+          <Field label={`Где используется ${i + 1}`}>
+            <input
+              placeholder="Логотип / фон (необязательно)"
+              value={c.name}
+              onChange={(e) =>
+                setColors((cs) =>
+                  cs.map((v) =>
+                    v.id === c.id ? { ...v, name: e.target.value } : v,
+                  ),
+                )
+              }
+            />
+          </Field>
+          {!order?.colors.some((v) => v.id === c.id) && colors.length > 1 && (
+            <button
+              className="icon-button"
+              aria-label={`Убрать Pantone ${i + 1}`}
+              onClick={() => setColors((cs) => cs.filter((v) => v.id !== c.id))}
+            >
+              <Trash2 size={16} />
+            </button>
+          )}
+        </div>
+      ))}
+      <button
+        className="secondary"
+        onClick={() => setColors([...colors, newColor()])}
+      >
+        <Plus size={16} />
+        Ещё Pantone
+      </button>
       <div className="actions">
         <button
           disabled={busy}
           onClick={async () => {
             setBusy(true);
             try {
-              if (!values.name.trim()) throw Error("Введите название заказа");
-              await onSave({ ...values, name: values.name.trim() });
+              if (!name.trim()) throw Error("Введите название заказа");
+              if (colors.some((c) => !c.pantone.trim()))
+                throw Error("Укажите номера Pantone");
+              await onSave({
+                name: name.trim(),
+                code,
+                customer,
+                notes: order?.notes || "",
+                colors: colors.map((c) => ({
+                  ...c,
+                  pantone: c.pantone.trim(),
+                })),
+              });
             } catch (e) {
               onError((e as Error).message);
             } finally {
@@ -259,573 +289,528 @@ function OrderForm({
           Сохранить заказ
         </button>
         <button className="subtle" onClick={onClose}>
-          Отмена
+          Закрыть
         </button>
       </div>
     </section>
   );
 }
-function OrderDetail({ order, ...props }: Props & { order: Order }) {
-  const [editing, setEditing] = useState(false),
-    [addingReference, setAddingReference] = useState(false),
-    [starting, setStarting] = useState(false);
-  const runs = props.batches
-    .filter((b) => b.orderId === order.id)
-    .sort(
-      (a, b) =>
-        (b.runDate || b.createdAt).localeCompare(a.runDate || a.createdAt) ||
-        b.createdAt.localeCompare(a.createdAt),
-    );
-  const reference = order.references.find(
-    (r) => r.id === order.currentReferenceId,
-  );
+function OrderWorkspace({
+  order,
+  selectedId,
+  ...props
+}: Props & { order: Order; selectedId?: string }) {
+  const [editing, setEditing] = useState(false);
+  const color =
+    order.colors.find((c) => c.id === selectedId) || order.colors[0];
   return (
     <>
       <a className="back-link" href="#orders">
-        <ArrowLeft size={17} />
+        <ArrowLeft size={16} />
         Все заказы
       </a>
       <div className="page-heading">
         <div>
           <div className="eyebrow">
             {[order.code, order.customer].filter(Boolean).join(" · ") ||
-              "КАРТОЧКА ЗАКАЗА"}
+              "ЗАКАЗ"}
           </div>
           <h1>{order.name}</h1>
-          <p>{order.pantone || "Pantone не указан"}</p>
         </div>
-        <button disabled={!reference} onClick={() => setStarting(!starting)}>
-          <Plus size={18} />
-          Новый запуск
+        <button className="secondary" onClick={() => setEditing(!editing)}>
+          Изменить / добавить Pantone
         </button>
       </div>
-      <button className="subtle" onClick={() => setEditing(!editing)}>
-        Изменить карточку заказа
-      </button>
       {editing && (
         <OrderForm
           order={order}
-          onClose={() => setEditing(false)}
           onError={props.onError}
+          onClose={() => setEditing(false)}
           onSave={async (values) => {
-            await db.orders.update(order.id, values);
+            await db.transaction("rw", db.orders, async () => {
+              const latest = (await db.orders.get(order.id))!;
+              const colors = values.colors.map((c) => {
+                const old = latest.colors.find((v) => v.id === c.id);
+                return old
+                  ? {
+                      ...old,
+                      pantone: c.pantone,
+                      name: c.name,
+                      currentReferenceId:
+                        old.pantone === c.pantone ? old.currentReferenceId : "",
+                    }
+                  : c;
+              });
+              await db.orders.put({
+                ...latest,
+                ...values,
+                colors,
+                pantone: colors.map((c) => c.pantone).join(", "),
+              });
+            });
             setEditing(false);
             props.onChange();
           }}
         />
       )}
-      <section className="card order-reference">
-        <div className="card-heading">
-          <h3>Эталон заказа</h3>
-          {reference && (
-            <button
-              className="subtle"
-              onClick={() => setAddingReference(!addingReference)}
-            >
-              Новая версия эталона
-            </button>
+      <nav className="pantone-tabs" aria-label="Pantone заказа">
+        {order.colors.map((c) => (
+          <a
+            className={c.id === color?.id ? "active" : ""}
+            href={`#orders/${order.id}/colors/${c.id}`}
+            key={c.id}
+          >
+            {c.pantone}
+            {c.name && <small>{c.name}</small>}
+          </a>
+        ))}
+      </nav>
+      {color && (
+        <ColorWorkspace key={color.id} {...props} order={order} color={color} />
+      )}
+    </>
+  );
+}
+function ColorWorkspace({
+  order,
+  color,
+  ...props
+}: Props & { order: Order; color: OrderColor }) {
+  const [editingReference, setEditingReference] = useState(
+      !color.currentReferenceId,
+    ),
+    [initial, setInitial] = useState<Component[]>([
+      { inkId: props.inks[0]?.id || "", grams: "" },
+    ]),
+    [additions, setAdditions] = useState<Component[]>([
+      { inkId: props.inks[0]?.id || "", grams: "" },
+    ]),
+    [comment, setComment] = useState(""),
+    [candidate, setCandidate] = useState<Measurement>(),
+    [photo, setPhoto] = useState<PhotoSelection["photo"]>(),
+    [busy, setBusy] = useState(false),
+    [savedId, setSavedId] = useState(""),
+    [mode, setMode] = useState<"photo" | "lab">("photo"),
+    [conditions, setConditions] = useState(props.settings.conditions);
+  useEffect(() => {
+    if (candidate && window.matchMedia("(max-width:900px)").matches)
+      document
+        .getElementById("comparison-" + color.id)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [candidate?.id]);
+  const reference = color.references.find(
+    (r) => r.id === color.currentReferenceId,
+  );
+  const batches = props.batches
+    .filter((b) => b.orderId === order.id && b.colorId === color.id)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const active =
+    batches.find(
+      (b) =>
+        b.status === "ACTIVE" && b.referenceId === (reference?.id || undefined),
+    ) ||
+    batches.find(
+      (b) => b.status === "ACTIVE" && !b.referenceId && !b.samples.length,
+    );
+  const samples = batches
+    .flatMap((b) => b.samples.map((s) => ({ sample: s, batch: b })))
+    .sort((a, b) => b.sample.createdAt.localeCompare(a.sample.createdAt));
+  const latest = samples[0];
+  const previous = candidate
+    ? samples.find((s) => s.sample.id !== savedId)
+    : undefined;
+  const report =
+    reference && candidate
+      ? progress(reference.measurement, candidate, previous?.sample)
+      : undefined;
+  const changes =
+    active?.additions.filter(
+      (a) => !previous?.sample.additionIds?.includes(a.id),
+    ) || [];
+  async function attempt(action: () => Promise<void>) {
+    setBusy(true);
+    try {
+      await action();
+      props.onChange();
+    } catch (e) {
+      props.onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  function receive(s: PhotoSelection) {
+    setPhoto(s.photo);
+    setCandidate({
+      ...s.measurement,
+      profileId: props.settings.profileId || undefined,
+      conditions: {
+        ...props.settings.conditions,
+        whitePoint: "D50",
+        observer: "2",
+      },
+    });
+    setSavedId("");
+  }
+  return (
+    <div className="color-workspace">
+      <section className="card target-strip">
+        <div>
+          <div className="eyebrow">ЭТАЛОН · {color.pantone}</div>
+          {reference ? (
+            <>
+              <strong>{reference.name}</strong>
+              <p className="hint">
+                {reference.measurement.source.startsWith("PHOTO")
+                  ? "Фотооценка"
+                  : "Измерение прибора"}{" "}
+                · {date(reference.createdAt)}
+              </p>
+              <SamplePhotos
+                key={reference.id}
+                ids={reference.photoIds}
+                autoLoad
+              />
+            </>
+          ) : (
+            <p>Загрузите эталон этого Pantone и выделите цветовой участок.</p>
           )}
         </div>
-        {reference ? (
-          <>
-            <div className="reference-overview">
-              <div>
-                <h4>{reference.name}</h4>
-                <p className="hint">
-                  {reference.measurement.source.startsWith("PHOTO")
-                    ? "Фотооценка"
-                    : "Измерение прибора"}{" "}
-                  · {date(reference.createdAt)} · версия{" "}
-                  {order.references.findIndex((r) => r.id === reference.id) + 1}
-                </p>
-              </div>
-              <div className="reference-coordinates">
-                L* {reference.measurement.lab.l.toFixed(1)} · a*{" "}
-                {reference.measurement.lab.a.toFixed(1)} · b*{" "}
-                {reference.measurement.lab.b.toFixed(1)}
-              </div>
-            </div>
-            <SamplePhotos
-              key={reference.id}
-              ids={reference.photoIds}
-              autoLoad
-            />
-            <p className="hint">
-              Этот эталон используется для новых запусков заказа. Ранее
-              сохранённые пробы и эталоны остаются в своей истории.
-            </p>
-          </>
-        ) : (
-          <>
-            <p>
-              Загрузите исходный эталон или введите измерение прибора. Он
-              останется в этом заказе для следующих смен.
-            </p>
-            <button onClick={() => setAddingReference(true)}>
-              Добавить эталон заказа
-            </button>
-          </>
-        )}
-        {order.notes && <p>{order.notes}</p>}
+        <button
+          className={reference ? "secondary" : ""}
+          onClick={() => setEditingReference(!editingReference)}
+        >
+          {reference ? "Заменить эталон" : "Добавить эталон"}
+        </button>
       </section>
-      {addingReference && (
+      {editingReference && (
         <ReferenceEditor
           settings={props.settings}
           onError={props.onError}
-          onClose={() => setAddingReference(false)}
-          onSave={async (ref, photos) => {
-            await saveOrderReference(order.id, ref, photos);
-            setAddingReference(false);
+          onClose={() => setEditingReference(false)}
+          onSave={async (r, photos) => {
+            await saveColorReference(order.id, color.id, r, photos);
+            setEditingReference(false);
+            setCandidate(undefined);
+            setPhoto(undefined);
+            setSavedId("");
             props.onChange();
-            props.onSuccess("Эталон сохранён в заказе");
+            props.onSuccess(`Эталон ${color.pantone} сохранён`);
           }}
         />
       )}
-      {starting && (
-        <NewRunForm
-          order={order}
-          inks={props.inks}
-          previous={runs[0]}
-          onClose={() => setStarting(false)}
-          onError={props.onError}
-          onStart={async (input) => {
-            const run = await createRun(order.id, input);
-            props.onChange();
-            location.hash = `orders/${order.id}/runs/${run.id}`;
-          }}
-        />
-      )}
-      <div className="section-heading">
-        <h2>История запусков</h2>
-        <span className="tag">{runs.length} запусков</span>
-      </div>
-      {!runs.length && (
-        <section className="card empty-state">
-          <CalendarDays size={35} />
-          <h3>Каждая смена начинается отдельно</h3>
-          <p>
-            Укажите дату, смену и фактический состав краски перед запуском. Все
-            пробы и добавки сохранятся здесь.
-          </p>
-          {reference && (
-            <button onClick={() => setStarting(true)}>
-              Начать первый запуск
-            </button>
-          )}
-        </section>
-      )}
-      <div className="run-list">
-        {runs.map((b) => (
-          <article className="card run-record" key={b.id}>
+      <div className="bench-grid">
+        <div className="stack">
+          <section className="card mixture-panel">
             <div className="card-heading">
-              <div>
-                <h3>
-                  {b.runDate || date(b.createdAt)} ·{" "}
-                  {b.shift || "Смена не указана"}
-                </h3>
-                <small>
-                  {b.status === "ACTIVE" ? "В работе" : "Завершён"} · эталон v
-                  {order.references.findIndex((r) => r.id === b.referenceId) +
-                    1 || "—"}
-                </small>
-              </div>
-              <a
-                className="button secondary"
-                href={`#orders/${order.id}/runs/${b.id}`}
-              >
-                Открыть запуск
-                <ArrowRight size={16} />
-              </a>
+              <h3>Что есть в краске</h3>
+              <strong className="mass-badge">
+                {active?.compositionKnown !== false && active
+                  ? `${total(composition(active))} г`
+                  : "Масса неизвестна"}
+              </strong>
             </div>
-            <div className="run-summary">
-              <span>{b.samples.length} проб</span>
-              <span>{b.additions.length} добавок</span>
-              <strong>{total(composition(b))} г</strong>
-            </div>
-            {b.comment && <p>{b.comment}</p>}
+            {active?.compositionKnown !== false && active ? (
+              <Composition value={composition(active)} inks={props.inks} />
+            ) : (
+              <p className="hint">
+                Можно сравнивать фото без рецептуры. Внесённые добавки
+                сохранятся отдельно; общая масса пока неизвестна.
+              </p>
+            )}
+            {active?.compositionKnown === false &&
+              active.additions.length > 0 && (
+                <>
+                  <p className="hint">
+                    Известные добавки:{" "}
+                    {total(active.additions.map((a) => a.component))} г
+                  </p>
+                  <Composition
+                    value={composition(active)}
+                    inks={props.inks}
+                    totalLabel="Всего известных добавок"
+                    showPercent={false}
+                  />
+                </>
+              )}
             <details>
-              <summary>Все пробы, добавки и состав этого запуска</summary>
-              <RunHistory run={b} inks={props.inks} />
+              <summary>
+                {active
+                  ? "Краска изменилась / указать новый исходный состав"
+                  : "Указать исходный состав (если известен)"}
+              </summary>
+              <p className="hint">
+                Если эту краску меняли на другом заказе, введите, что сейчас в
+                ёмкости. Прошлые пробы останутся в истории.
+              </p>
+              <ComponentsEditor
+                value={initial}
+                onChange={setInitial}
+                inks={props.inks}
+              />
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() =>
+                  void attempt(async () => {
+                    await setColorComposition(order.id, color.id, initial);
+                    setCandidate(undefined);
+                    setSavedId("");
+                    props.onSuccess("Исходный состав сохранён");
+                  })
+                }
+              >
+                Сохранить исходный состав
+              </button>
             </details>
-          </article>
-        ))}
-      </div>
-      {order.references.length > 1 && (
-        <details className="card">
-          <summary>Все версии эталона ({order.references.length})</summary>
-          {order.references.map((r, i) => (
-            <article className="reference-version" key={r.id}>
-              <h4>
-                v{i + 1} · {r.name}
-              </h4>
-              <small>{date(r.createdAt)}</small>
-              <MeasurementCard title="Эталон" measurement={r.measurement} />
-              <SamplePhotos ids={r.photoIds} />
-            </article>
-          ))}
-        </details>
-      )}
-    </>
-  );
-}
-function ReferenceEditor({
-  settings,
-  onSave,
-  onClose,
-  onError,
-}: {
-  settings: Settings;
-  onSave: (
-    ref: OrderReference,
-    photos: PhotoSelection["photo"][],
-  ) => Promise<void>;
-  onClose: () => void;
-  onError: (s: string) => void;
-}) {
-  const [selection, setSelection] = useState<PhotoSelection>(),
-    [measurement, setMeasurement] = useState<Measurement>(),
-    [kind, setKind] = useState<"photo" | "lab">("photo"),
-    [name, setName] = useState("Исходный эталон"),
-    [conditions, setConditions] = useState(settings.conditions),
-    [busy, setBusy] = useState(false);
-  return (
-    <section className="reference-editor">
-      <div className="card">
-        <div className="card-heading">
-          <h3>Сохранить эталон</h3>
-          <button className="subtle" onClick={onClose}>
-            Закрыть
-          </button>
-        </div>
-        <Field label="Название эталона">
-          <input value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <div className="segmented">
-          <button
-            className={kind === "photo" ? "active" : ""}
-            onClick={() => {
-              setKind("photo");
-              setMeasurement(undefined);
-            }}
-          >
-            Фотография
-          </button>
-          <button
-            className={kind === "lab" ? "active" : ""}
-            onClick={() => {
-              setKind("lab");
-              setSelection(undefined);
-            }}
-          >
-            Lab / CSV
-          </button>
-        </div>
-        {kind === "lab" && (
-          <>
-            <ConditionsEditor value={conditions} onChange={setConditions} />
-            <SpectroInput
-              title="Эталон заказа"
-              conditions={conditions}
-              onMeasurement={setMeasurement}
-              onError={onError}
+          </section>
+          <section className="card addition-panel">
+            <h3>Что добавил</h3>
+            <ComponentsEditor
+              value={additions}
+              onChange={setAdditions}
+              inks={props.inks}
             />
-          </>
-        )}
-      </div>
-      {kind === "photo" && (
-        <PhotoEditor
-          label="Эталон заказа"
-          onInvalidate={() => {
-            setSelection(undefined);
-            setMeasurement(undefined);
-          }}
-          onAnalyze={(s) => {
-            const m = {
-              ...s.measurement,
-              profileId: settings.profileId || undefined,
-              conditions: {
-                ...settings.conditions,
-                whitePoint: "D50" as const,
-                observer: "2" as const,
-              },
-            };
-            setSelection({ ...s, measurement: m });
-            setMeasurement(m);
-          }}
-          onError={onError}
-        />
-      )}
-      {measurement && (
-        <section className="card">
-          <MeasurementCard title="Выбранный эталон" measurement={measurement} />
-          <button
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                if (!name.trim()) throw Error("Укажите название эталона");
-                await onSave(
-                  {
-                    id: id(),
-                    createdAt: now(),
-                    name: name.trim(),
-                    measurement,
-                    photoIds: selection ? [selection.photo.id] : [],
-                  },
-                  selection ? [selection.photo] : [],
-                );
-              } catch (e) {
-                onError((e as Error).message);
-              } finally {
-                setBusy(false);
+            <Field label="Заметка к добавке">
+              <input
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+              />
+            </Field>
+            <button
+              disabled={busy}
+              onClick={() =>
+                void attempt(async () => {
+                  const batch = await ensureWorkingBatch(order.id, color.id);
+                  await addComponents(batch.id, additions, comment);
+                  setAdditions([{ inkId: props.inks[0]?.id || "", grams: "" }]);
+                  setComment("");
+                  setCandidate(undefined);
+                  setSavedId("");
+                  props.onSuccess(
+                    "Добавки записаны. Выкатайте и загрузите новую пробу.",
+                  );
+                })
               }
-            }}
-          >
-            Сохранить эталон заказа
-          </button>
-        </section>
-      )}
-    </section>
-  );
-}
-function NewRunForm({
-  order,
-  inks,
-  previous,
-  onStart,
-  onClose,
-  onError,
-}: {
-  order: Order;
-  inks: Ink[];
-  previous?: Batch;
-  onStart: (input: {
-    runDate: string;
-    shift: string;
-    components: Component[];
-    comment: string;
-  }) => Promise<void>;
-  onClose: () => void;
-  onError: (s: string) => void;
-}) {
-  const [runDate, setRunDate] = useState(localDate),
-    [shift, setShift] = useState(""),
-    [components, setComponents] = useState<Component[]>([
-      { inkId: inks[0]?.id || "", grams: "" },
-    ]),
-    [comment, setComment] = useState(""),
-    [busy, setBusy] = useState(false);
-  return (
-    <section className="card">
-      <h3>Новый запуск заказа «{order.name}»</h3>
-      <div className="form-grid">
-        <Field label="Дата запуска">
-          <input
-            type="date"
-            value={runDate}
-            onChange={(e) => setRunDate(e.target.value)}
-          />
-        </Field>
-        <Field label="Смена">
-          <input
-            placeholder="Например, дневная / Иванов"
-            value={shift}
-            onChange={(e) => setShift(e.target.value)}
-          />
-        </Field>
-      </div>
-      <h4>Краска на начало смены</h4>
-      <p>
-        Укажите фактические компоненты и массы. Если краску корректировали на
-        другом заказе, её прежний состав здесь не подходит.
-      </p>
-      <ComponentsEditor
-        value={components}
-        onChange={setComponents}
-        inks={inks}
-      />
-      {previous && (
-        <button
-          className="subtle"
-          onClick={() => {
-            setComponents(composition(previous));
-            setComment(
-              "Состав взят из предыдущего запуска этого заказа. Проверить фактические массы перед началом.",
-            );
-          }}
-        >
-          Подставить состав прошлого запуска этого заказа
-        </button>
-      )}
-      <Field label="Комментарий к запуску">
-        <textarea
-          value={comment}
-          onChange={(e) => setComment(e.target.value)}
-        />
-      </Field>
-      <div className="actions">
-        <button
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await onStart({ runDate, shift, components, comment });
-            } catch (e) {
-              onError((e as Error).message);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          Начать запуск
-        </button>
-        <button className="subtle" onClick={onClose}>
-          Отмена
-        </button>
-      </div>
-    </section>
-  );
-}
-function RunWorkspace({
-  order,
-  run,
-  ...props
-}: Props & { order: Order; run: Batch }) {
-  const [tab, setTab] = useState<"sample" | "mixture">("sample");
-  const reference = order.references.find((r) => r.id === run.referenceId);
-  return (
-    <>
-      <a href={`#orders/${order.id}`} className="back-link">
-        <ArrowLeft size={17} />
-        Заказ и вся история
-      </a>
-      <div className="page-heading">
-        <div>
-          <div className="eyebrow">
-            {order.code || "ЗАКАЗ"} · {order.pantone}
-          </div>
-          <h1>{order.name}</h1>
-          <p>
-            {run.runDate} · {run.shift} ·{" "}
-            {run.status === "ACTIVE" ? "В работе" : "Завершён"}
-          </p>
-        </div>
-        <span className="tag">
-          Эталон v
-          {order.references.findIndex((r) => r.id === run.referenceId) + 1 ||
-            "—"}
-        </span>
-      </div>
-      <div className="run-context">
-        <span>
-          <b>{total(composition(run))} г</b> в смеси
-        </span>
-        <span>{run.samples.length} проб</span>
-        <span>{run.additions.length} добавок</span>
-      </div>
-      <div className="segmented">
-        <button
-          className={tab === "sample" ? "active" : ""}
-          onClick={() => setTab("sample")}
-        >
-          <ScanLine size={17} />
-          Новая проба
-        </button>
-        <button
-          className={tab === "mixture" ? "active" : ""}
-          onClick={() => setTab("mixture")}
-        >
-          <History size={17} />
-          Состав и история смены
-        </button>
-      </div>
-      {tab === "sample" ? (
-        run.status === "ACTIVE" ? (
-          <Compare
-            key={`${run.id}:${run.referenceId || ""}`}
-            batches={[run]}
-            inks={props.inks}
-            settings={props.settings}
-            onChange={props.onChange}
-            onError={props.onError}
-            onSuccess={props.onSuccess}
-            fixedBatchId={run.id}
-            reference={reference}
-            embedded
-          />
-        ) : (
-          <section className="card">
-            <p>
-              Запуск завершён. Его пробы и добавки доступны в истории смены.
-            </p>
-            <button onClick={() => setTab("mixture")}>
-              Открыть историю смены
+            >
+              Записать добавки
             </button>
           </section>
-        )
-      ) : (
-        <Batches
-          batches={[run]}
-          inks={props.inks}
-          recipes={[]}
-          experiments={props.experiments}
-          onChange={props.onChange}
-          onError={props.onError}
-          fixedBatchId={run.id}
-        />
-      )}
-    </>
-  );
-}
-function RunHistory({ run, inks }: { run: Batch; inks: Ink[] }) {
-  const events = [
-    ...run.samples.map((value) => ({ kind: "sample" as const, value })),
-    ...run.additions.map((value) => ({ kind: "addition" as const, value })),
-  ].sort((a, b) => a.value.createdAt.localeCompare(b.value.createdAt));
-  return (
-    <>
-      <h4>Исходная смесь</h4>
-      <Composition value={run.initial} inks={inks} />
-      <div className="timeline order-timeline">
-        {events.map((e) => (
-          <article key={e.value.id}>
-            <small>{date(e.value.createdAt)}</small>
-            {e.kind === "addition" ? (
-              <>
-                <h4>
-                  Добавлено {e.value.component.grams} г ·{" "}
-                  {inks.find((i) => i.id === e.value.component.inkId)?.name}
-                </h4>
-                <p>{e.value.comment}</p>
-              </>
-            ) : (
-              <>
-                <h4>
-                  Проба · ΔE00{" "}
-                  {difference(
-                    e.value.target.lab,
-                    e.value.current.lab,
-                  ).de00.toFixed(2)}
-                </h4>
-                <MeasurementCard title="Оттиск" measurement={e.value.current} />
-                <details>
-                  <summary>Эталон, состав и фотографии пробы</summary>
-                  <MeasurementCard
-                    title="Эталон этой пробы"
-                    measurement={e.value.target}
+          {reference && (
+            <>
+              <div className="sample-section-heading">
+                <h3>
+                  {samples.length
+                    ? "Выкатал — загрузить пробу"
+                    : "Загрузить исходный оттиск"}
+                </h3>
+                <button
+                  className="subtle"
+                  onClick={() => {
+                    setMode(mode === "photo" ? "lab" : "photo");
+                    setCandidate(undefined);
+                    setPhoto(undefined);
+                    setSavedId("");
+                  }}
+                >
+                  {mode === "photo" ? "Ввести Lab / CSV" : "Загрузить фото"}
+                </button>
+              </div>
+              {mode === "photo" ? (
+                <PhotoEditor
+                  compact
+                  label="Новая проба"
+                  onAnalyze={receive}
+                  onInvalidate={() => {
+                    setCandidate(undefined);
+                    setSavedId("");
+                  }}
+                  onError={props.onError}
+                />
+              ) : (
+                <section className="card">
+                  <ConditionsEditor
+                    value={conditions}
+                    onChange={setConditions}
                   />
-                  <Composition value={e.value.components} inks={inks} />
-                  <SamplePhotos ids={e.value.photoIds} />
-                </details>
-                <p>{e.value.comment}</p>
-              </>
-            )}
-          </article>
-        ))}
+                  <SpectroInput
+                    title="Новая проба"
+                    conditions={conditions}
+                    onMeasurement={(m) => {
+                      setCandidate(m);
+                      setPhoto(undefined);
+                      setSavedId("");
+                    }}
+                    onError={props.onError}
+                  />
+                </section>
+              )}
+            </>
+          )}
+        </div>
+        <aside className="stack bench-results" id={"comparison-" + color.id}>
+          {candidate && reference && (
+            <button
+              className="wide"
+              disabled={busy || !!savedId || !report?.toTarget}
+              onClick={() =>
+                void attempt(async () => {
+                  const batch = await ensureWorkingBatch(order.id, color.id);
+                  const sampleId = id();
+                  await saveSample(
+                    batch.id,
+                    {
+                      id: sampleId,
+                      createdAt: now(),
+                      target: reference.measurement,
+                      current: candidate,
+                      referenceId: reference.id,
+                      photoIds: [
+                        ...new Set([
+                          ...reference.photoIds,
+                          ...(photo ? [photo.id] : []),
+                        ]),
+                      ],
+                      components: composition(batch),
+                      comment: "",
+                      additionIds: [],
+                    },
+                    photo ? [photo] : [],
+                  );
+                  setSavedId(sampleId);
+                  props.onSuccess("Проба сохранена");
+                })
+              }
+            >
+              {savedId ? "Проба сохранена" : "Сохранить пробу"}
+            </button>
+          )}
+          {candidate && reference ? (
+            <ProgressReport
+              target={reference.measurement}
+              current={candidate}
+              previous={previous?.sample}
+              changes={previous?.batch.id === active?.id ? changes : []}
+              inks={props.inks}
+            />
+          ) : latest && reference ? (
+            <>
+              <p className="hint">
+                Последняя сохранённая проба · {date(latest.sample.createdAt)}
+                {latest.sample.referenceId !== reference.id
+                  ? " · Эталон изменён: разница пересчитана, исходное сравнение сохранено в истории."
+                  : ""}
+              </p>
+              <ProgressReport
+                target={reference.measurement}
+                current={latest.sample.current}
+                previous={samples[1]?.sample}
+                changes={latest.batch.additions.filter(
+                  (a) =>
+                    latest.sample.additionIds?.includes(a.id) &&
+                    !samples[1]?.sample.additionIds?.includes(a.id),
+                )}
+                inks={props.inks}
+              />
+            </>
+          ) : (
+            <section className="card">
+              <h3>Туда или не туда?</h3>
+              <p>
+                После анализа здесь появятся разница с эталоном, изменение
+                относительно прошлой пробы и советы.
+              </p>
+              <p className="hint">
+                Первая проба станет точкой отсчёта. После добавки загрузите
+                следующую.
+              </p>
+            </section>
+          )}
+        </aside>
       </div>
-      {!events.length && (
-        <p className="hint">Проб и добавок в этом запуске ещё нет.</p>
-      )}
-    </>
+      <details className="card color-history">
+        <summary>
+          Вся история {color.pantone} · проб: {samples.length}
+        </summary>
+        {batches.map((b) => (
+          <section className="history-mixture" key={b.id}>
+            <h3>
+              {date(b.createdAt)} · {b.pantone} ·{" "}
+              {b.compositionKnown === false
+                ? "Исходный состав неизвестен"
+                : `Исходная масса ${total(b.initial)} г`}
+            </h3>
+            {b.initial.length > 0 && (
+              <Composition value={b.initial} inks={props.inks} />
+            )}
+            <div className="timeline">
+              {[
+                ...b.samples.map((s) => ({
+                  kind: "sample" as const,
+                  value: s,
+                })),
+                ...b.additions.map((a) => ({
+                  kind: "addition" as const,
+                  value: a,
+                })),
+              ]
+                .sort((a, c) =>
+                  a.value.createdAt.localeCompare(c.value.createdAt),
+                )
+                .map((event) => (
+                  <article key={event.value.id}>
+                    <small>{date(event.value.createdAt)}</small>
+                    {event.kind === "addition" ? (
+                      <h4>
+                        + {event.value.component.grams} г ·{" "}
+                        {
+                          props.inks.find(
+                            (i) => i.id === event.value.component.inkId,
+                          )?.name
+                        }
+                        {event.value.comment && ` · ${event.value.comment}`}
+                      </h4>
+                    ) : (
+                      <>
+                        <h4>
+                          Проба · ΔE00{" "}
+                          {progress(
+                            event.value.target,
+                            event.value.current,
+                          ).toTarget?.de00.toFixed(2) ?? "условия различаются"}
+                        </h4>
+                        <details>
+                          <summary>Фото, измерение и состав</summary>
+                          <MeasurementCard
+                            title="Оттиск"
+                            measurement={event.value.current}
+                          />
+                          <SamplePhotos ids={event.value.photoIds} />
+                          {event.value.components.length > 0 && (
+                            <Composition
+                              value={event.value.components}
+                              inks={props.inks}
+                              showPercent={b.compositionKnown !== false}
+                              totalLabel={
+                                b.compositionKnown === false
+                                  ? "Зафиксированные компоненты"
+                                  : "Общая масса"
+                              }
+                            />
+                          )}
+                        </details>
+                      </>
+                    )}
+                  </article>
+                ))}
+            </div>
+          </section>
+        ))}
+        {!batches.length && (
+          <p>
+            Здесь сохранятся все пробы и внесённые компоненты этого Pantone.
+          </p>
+        )}
+      </details>
+    </div>
   );
 }

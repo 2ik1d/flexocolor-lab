@@ -36,6 +36,7 @@ export function PhotoEditor({
   onControl,
   onError,
   onInvalidate,
+  compact = false,
 }: {
   label: string;
   twoRegions?: boolean;
@@ -43,6 +44,7 @@ export function PhotoEditor({
   onControl?: (a: Measurement) => void;
   onError: (s: string) => void;
   onInvalidate?: () => void;
+  compact?: boolean;
 }) {
   const [canvas, setCanvas] = useState<HTMLCanvasElement>(),
     [photo, setPhoto] = useState<Photo>(),
@@ -172,10 +174,10 @@ export function PhotoEditor({
     }
   }
   return (
-    <section className="card photo-editor">
+    <section className={`card photo-editor ${compact ? "compact-photo" : ""}`}>
       <div className="card-heading">
         <h3>{label}</h3>
-        <span className="tag">sRGB → Lab D50 / 2°</span>
+        {!compact && <span className="tag">sRGB → Lab D50 / 2°</span>}
       </div>
       <div className="actions">
         <label className="button secondary">
@@ -209,18 +211,20 @@ export function PhotoEditor({
             }}
           />
         </label>
-        <button
-          className="subtle"
-          onClick={async () => {
-            try {
-              setStream(await requestCamera());
-            } catch (e) {
-              onError((e as Error).message);
-            }
-          }}
-        >
-          Камера в браузере
-        </button>
+        {!compact && (
+          <button
+            className="subtle"
+            onClick={async () => {
+              try {
+                setStream(await requestCamera());
+              } catch (e) {
+                onError((e as Error).message);
+              }
+            }}
+          >
+            Камера в браузере
+          </button>
+        )}
       </div>
       {stream && (
         <div>
@@ -347,7 +351,12 @@ export function PhotoEditor({
           {rects.map((r, i) => (
             <div className="roi-row" key={i}>
               <span>
-                {r.role === "target" ? "Эталон" : "Оттиск"} {i + 1}
+                {twoRegions
+                  ? r.role === "target"
+                    ? "Эталон"
+                    : "Оттиск"
+                  : "Участок"}{" "}
+                {i + 1}
               </span>
               {(["x", "y", "width", "height"] as const).map((key, j) => (
                 <label key={key}>
@@ -401,7 +410,7 @@ export function PhotoEditor({
       ) : (
         <div className="photo-empty">
           <Scan size={40} />
-          <strong>Эталон и оттиск рядом</strong>
+          <strong>{twoRegions ? "Эталон и оттиск рядом" : label}</strong>
           <span>Ровное освещение · без бликов · одна плоскость</span>
         </div>
       )}
@@ -442,10 +451,12 @@ export function PhotoEditor({
       <button className="wide" disabled={!photo || busy} onClick={analyze}>
         {onControl ? "Записать контрольную область" : "Анализировать области"}
       </button>
-      <Notice>
-        Оценка по фотографии не заменяет спектрофотометр. Используйте ровный
-        свет, одинаковую подложку и участки без бликов.
-      </Notice>
+      {!compact && (
+        <Notice>
+          Оценка по фотографии не заменяет спектрофотометр. Используйте ровный
+          свет, одинаковую подложку и участки без бликов.
+        </Notice>
+      )}
       <details>
         <summary>О точности фотоанализа</summary>
         <p className="hint">

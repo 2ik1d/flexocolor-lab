@@ -100,11 +100,17 @@ export function difference(target: Lab, current: Lab) {
     c,
     de00: deltaE2000(target, current),
     de76: deltaE76(target, current),
-    direction: [
-      l >= 0 ? "светлее" : "темнее",
-      a >= 0 ? "краснее" : "зеленее",
-      b >= 0 ? "желтее" : "синее",
-      c >= 0 ? "насыщеннее" : "менее насыщенный",
-    ].join(", "),
+    direction:
+      (
+        [
+          [l, "светлее", "темнее"],
+          [a, "краснее", "зеленее"],
+          [b, "желтее", "синее"],
+          [c, "насыщеннее", "менее насыщенный"],
+        ] as [number, string, string][]
+      )
+        .filter(([v]) => Math.abs(v) > 1e-9)
+        .map(([v, positive, negative]) => (v > 0 ? positive : negative))
+        .join(", ") || "без изменения по координатам",
   };
 }

@@ -91,9 +91,13 @@ export function ComponentsEditor({
 export function Composition({
   value,
   inks,
+  totalLabel = "Общая масса",
+  showPercent = true,
 }: {
   value: Component[];
   inks: Ink[];
+  totalLabel?: string;
+  showPercent?: boolean;
 }) {
   return (
     <div>
@@ -101,11 +105,11 @@ export function Composition({
         <div className="composition" key={i}>
           <span>{inks.find((ink) => ink.id === c.inkId)?.name || c.inkId}</span>
           <strong>{c.grams} г</strong>
-          <small>{percent(c, value)}%</small>
+          <small>{showPercent ? `${percent(c, value)}%` : ""}</small>
         </div>
       ))}
       <div className="composition total">
-        <span>Общая масса</span>
+        <span>{totalLabel}</span>
         <strong>{total(value)} г</strong>
       </div>
     </div>

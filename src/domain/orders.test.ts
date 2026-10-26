@@ -25,6 +25,7 @@ const order: Order = {
   notes: "",
   references: [reference],
   currentReferenceId: reference.id,
+  colors: [],
 };
 it("повторный запуск с тем же эталоном получает независимый фактический состав", () => {
   const first = makeRun(order, {

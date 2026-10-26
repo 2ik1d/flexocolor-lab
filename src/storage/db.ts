@@ -16,9 +16,16 @@ import {
   type Measurement,
   type Order,
   type OrderReference,
+  type Component,
   orderReferenceSchema,
 } from "../domain/types";
-import { migrateLegacyBatches, makeRun, type NewRun } from "../domain/orders";
+import {
+  migrateLegacyBatches,
+  makeRun,
+  upgradeOrderColors,
+  makeWorkingBatch,
+  type NewRun,
+} from "../domain/orders";
 import { composition, normalize, total } from "../domain/mixture";
 import { deltaE2000 } from "../color/color";
 export class LabDB extends Dexie {
@@ -65,6 +72,15 @@ export class LabDB extends Dexie {
       .upgrade(async (tx) => {
         const batches = await tx.table<Batch>("batches").toArray();
         const orders = migrateLegacyBatches(batches);
+        await tx.table("orders").bulkPut(orders);
+        await tx.table("batches").bulkPut(batches);
+      });
+    this.version(4)
+      .stores({ batches: "id,createdAt,status,orderId,colorId" })
+      .upgrade(async (tx) => {
+        const orders = await tx.table<Order>("orders").toArray(),
+          batches = await tx.table<Batch>("batches").toArray();
+        upgradeOrderColors(orders, batches);
         await tx.table("orders").bulkPut(orders);
         await tx.table("batches").bulkPut(batches);
       });
@@ -138,7 +154,7 @@ export async function exportData(database = db) {
   );
   return backupSchema.parse({
     format: "FlexoColorLab",
-    version: 3,
+    version: 4,
     exportedAt: now(),
     inks,
     recipes,
@@ -165,7 +181,17 @@ export function validateBackup(raw: unknown) {
       .parse(raw);
     const batches = structuredClone(legacy.batches);
     const orders = migrateLegacyBatches(batches);
-    input = { ...legacy, version: 3, batches, orders };
+    upgradeOrderColors(orders, batches);
+    input = { ...legacy, version: 4, batches, orders };
+  } else if (
+    typeof raw === "object" &&
+    raw !== null &&
+    "version" in raw &&
+    raw.version === 3
+  ) {
+    const legacy = backupSchema.extend({ version: z.literal(3) }).parse(raw);
+    upgradeOrderColors(legacy.orders, legacy.batches);
+    input = { ...legacy, version: 4 };
   }
   const b = backupSchema.parse(input);
   const unique = (arr: { id: string }[]) => {
@@ -221,18 +247,28 @@ export function validateBackup(raw: unknown) {
     if (batch.orderId) {
       const order = orders.get(batch.orderId);
       if (!order) throw Error("Не найден заказ запуска");
+      const color = batch.colorId
+        ? order.colors.find((c) => c.id === batch.colorId)
+        : undefined;
+      if (batch.colorId && !color) throw Error("Не найден Pantone заказа");
       if (
         batch.referenceId &&
-        !order.references.some((r) => r.id === batch.referenceId)
+        !(color?.references || order.references).some(
+          (r) => r.id === batch.referenceId,
+        )
       )
         throw Error("Не найден эталон запуска");
     }
     unique(batch.samples);
     unique(batch.additions);
-    check(batch.initial);
+    if (batch.initial.length || batch.compositionKnown !== false)
+      check(batch.initial);
     batch.additions.forEach((a) => check([a.component]));
     batch.samples.forEach((s) => {
-      check(s.components);
+      if (s.referenceId && s.referenceId !== batch.referenceId)
+        throw Error("Эталон пробы не соответствует смеси");
+      if (s.components.length || batch.compositionKnown !== false)
+        check(s.components);
       checkMeasurement(s.target);
       checkMeasurement(s.current);
       if (s.photoIds.some((p) => !photos.has(p)))
@@ -244,6 +280,20 @@ export function validateBackup(raw: unknown) {
     });
   });
   b.orders.forEach((o) => {
+    unique(o.colors);
+    o.colors.forEach((c) => {
+      unique(c.references);
+      if (
+        c.currentReferenceId &&
+        !c.references.some((r) => r.id === c.currentReferenceId)
+      )
+        throw Error("Не найден эталон Pantone");
+      c.references.forEach((r) => {
+        checkMeasurement(r.measurement);
+        if (r.photoIds.some((p) => !photos.has(p)))
+          throw Error("Отсутствует фото эталона Pantone");
+      });
+    });
     unique(o.references);
     if (
       o.currentReferenceId &&
@@ -259,8 +309,11 @@ export function validateBackup(raw: unknown) {
   b.profiles.forEach((p) => p.controls.forEach(checkMeasurement));
   b.experiments.forEach((e) => {
     if (!batches.has(e.batchId)) throw Error("Не найдена партия эксперимента");
-    check(e.before);
-    check(e.after);
+    if (e.before.length) check(e.before);
+    else if (!e.excluded)
+      throw Error("Неизвестный исходный состав эксперимента");
+    if (e.after.length) check(e.after);
+    else if (!e.excluded) throw Error("Неизвестный состав эксперимента");
     e.additions.forEach((a) => check([a.component]));
     checkMeasurement(e.beforeMeasurement);
     checkMeasurement(e.afterMeasurement);
@@ -337,6 +390,8 @@ export async function saveSample(
         );
         if (additions.length) {
           const warnings = quality(prev.current, sample.current);
+          if (b.compositionKnown === false)
+            warnings.push("Исходный состав краски неизвестен");
           await database.experiments.add({
             id: id(),
             batchId,
@@ -420,6 +475,142 @@ export async function createRun(orderId: string, input: NewRun, database = db) {
       const run = makeRun(order, input);
       await database.batches.add(run);
       return run;
+    },
+  );
+}
+export async function saveColorReference(
+  orderId: string,
+  colorId: string,
+  reference: OrderReference,
+  photos: Photo[],
+  database = db,
+) {
+  const r = orderReferenceSchema.parse(reference);
+  await database.transaction(
+    "rw",
+    database.orders,
+    database.photos,
+    async () => {
+      const order = await database.orders.get(orderId),
+        color = order?.colors.find((c) => c.id === colorId);
+      if (!order || !color) throw Error("Pantone заказа не найден");
+      if (color.references.some((old) => old.id === r.id))
+        throw Error("Эталон уже сохранён");
+      await database.photos.bulkPut(photos);
+      if ((await database.photos.bulkGet(r.photoIds)).some((p) => !p))
+        throw Error("Фото эталона не найдено");
+      color.references.push(r);
+      color.currentReferenceId = r.id;
+      // Retain the old single-colour fields for compatibility with previous backups.
+      if (order.colors[0].id === colorId) {
+        order.references = color.references;
+        order.currentReferenceId = r.id;
+      }
+      await database.orders.put(order);
+    },
+  );
+}
+export async function ensureWorkingBatch(
+  orderId: string,
+  colorId: string,
+  database = db,
+) {
+  return database.transaction(
+    "rw",
+    database.orders,
+    database.batches,
+    async () => {
+      const order = await database.orders.get(orderId),
+        color = order?.colors.find((c) => c.id === colorId);
+      if (!order || !color) throw Error("Pantone заказа не найден");
+      const batches = (
+        await database.batches.where("colorId").equals(colorId).toArray()
+      )
+        .filter((b) => b.orderId === orderId && b.status === "ACTIVE")
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const existing = batches.find(
+        (b) => b.referenceId === (color.currentReferenceId || undefined),
+      );
+      if (existing) return existing;
+      const unreferenced = batches.find(
+        (b) => !b.referenceId && !b.samples.length,
+      );
+      if (unreferenced) {
+        unreferenced.referenceId = color.currentReferenceId || undefined;
+        await database.batches.put(unreferenced);
+        return unreferenced;
+      }
+      const batch = makeWorkingBatch(order, color);
+      await database.batches.add(batch);
+      return batch;
+    },
+  );
+}
+export async function setColorComposition(
+  orderId: string,
+  colorId: string,
+  components: Component[],
+  database = db,
+) {
+  const initial = normalize(components);
+  if (!Number(total(initial)))
+    throw Error("Укажите компоненты и положительные массы");
+  return database.transaction(
+    "rw",
+    database.orders,
+    database.batches,
+    async () => {
+      const current = await ensureWorkingBatch(orderId, colorId, database);
+      if (!current.samples.length && !current.additions.length) {
+        current.initial = initial;
+        current.compositionKnown = true;
+        await database.batches.put(current);
+        return current;
+      }
+      const order = (await database.orders.get(orderId))!,
+        color = order.colors.find((c) => c.id === colorId)!;
+      await database.batches.update(current.id, { status: "DONE" });
+      const next = makeWorkingBatch(order, color, initial);
+      await database.batches.add(next);
+      return next;
+    },
+  );
+}
+export async function addComponents(
+  batchId: string,
+  components: Component[],
+  comment: string,
+  database = db,
+) {
+  const additions = normalize(components);
+  if (!additions.length) throw Error("Введите массу хотя бы одной добавки");
+  await database.transaction(
+    "rw",
+    database.batches,
+    database.inks,
+    async () => {
+      const batch = await database.batches.get(batchId);
+      if (!batch || batch.status !== "ACTIVE")
+        throw Error("Текущая краска недоступна");
+      if (
+        (await database.inks.bulkGet(additions.map((c) => c.inkId))).some(
+          (i) => !i,
+        )
+      )
+        throw Error("Краска не найдена в справочнике");
+      const operationId = id(),
+        createdAt = now();
+      batch.additions.push(
+        ...additions.map((component) => ({
+          id: id(),
+          operationId,
+          createdAt,
+          component,
+          comment,
+        })),
+      );
+      composition(batch);
+      await database.batches.put(batch);
     },
   );
 }
