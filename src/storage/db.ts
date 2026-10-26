@@ -18,7 +18,12 @@ import {
   type OrderReference,
   type Component,
   orderReferenceSchema,
+  orderSchema,
+  pantoneSchema,
+  type Pantone,
 } from "../domain/types";
+import { collectPantones, pantoneKey } from "../domain/pantones";
+import { comparable } from "../domain/progress";
 import {
   migrateLegacyBatches,
   makeRun,
@@ -37,6 +42,7 @@ export class LabDB extends Dexie {
   photos!: Table<Photo, string>;
   settings!: Table<Settings, string>;
   orders!: Table<Order, string>;
+  pantones!: Table<Pantone, string>;
   constructor(name = "FlexoColorLab") {
     super(name);
     this.version(1).stores({
@@ -83,6 +89,13 @@ export class LabDB extends Dexie {
         upgradeOrderColors(orders, batches);
         await tx.table("orders").bulkPut(orders);
         await tx.table("batches").bulkPut(batches);
+      });
+    this.version(5)
+      .stores({ pantones: "id,pantone", orders: "id,name,code,status" })
+      .upgrade(async (tx) => {
+        const orders = await tx.table<Order>("orders").toArray();
+        const recipes = await tx.table<Recipe>("recipes").toArray();
+        await tx.table("pantones").bulkPut(collectPantones(orders, recipes));
       });
   }
 }
@@ -140,6 +153,7 @@ export async function exportData(database = db) {
     photos,
     settings,
     orders,
+    pantones,
   ] = await database.transaction("r", database.tables, () =>
     Promise.all([
       database.inks.toArray(),
@@ -150,11 +164,12 @@ export async function exportData(database = db) {
       database.photos.toArray(),
       database.settings.toArray(),
       database.orders.toArray(),
+      database.pantones.toArray(),
     ]),
   );
   return backupSchema.parse({
     format: "FlexoColorLab",
-    version: 4,
+    version: 5,
     exportedAt: now(),
     inks,
     recipes,
@@ -164,6 +179,7 @@ export async function exportData(database = db) {
     photos,
     settings,
     orders,
+    pantones,
   });
 }
 export function validateBackup(raw: unknown) {
@@ -176,22 +192,50 @@ export function validateBackup(raw: unknown) {
   ) {
     // Parse every legacy field before deriving orders; never mutate the source.
     const legacy = backupSchema
-      .omit({ orders: true })
+      .omit({ orders: true, pantones: true })
       .extend({ version: z.literal(2) })
       .parse(raw);
     const batches = structuredClone(legacy.batches);
     const orders = migrateLegacyBatches(batches);
     upgradeOrderColors(orders, batches);
-    input = { ...legacy, version: 4, batches, orders };
+    input = {
+      ...legacy,
+      version: 5,
+      batches,
+      orders,
+      pantones: collectPantones(orders, legacy.recipes),
+    };
   } else if (
     typeof raw === "object" &&
     raw !== null &&
     "version" in raw &&
     raw.version === 3
   ) {
-    const legacy = backupSchema.extend({ version: z.literal(3) }).parse(raw);
+    const legacy = backupSchema
+      .omit({ pantones: true })
+      .extend({ version: z.literal(3) })
+      .parse(raw);
     upgradeOrderColors(legacy.orders, legacy.batches);
-    input = { ...legacy, version: 4 };
+    input = {
+      ...legacy,
+      version: 5,
+      pantones: collectPantones(legacy.orders, legacy.recipes),
+    };
+  } else if (
+    typeof raw === "object" &&
+    raw !== null &&
+    "version" in raw &&
+    raw.version === 4
+  ) {
+    const legacy = backupSchema
+      .omit({ pantones: true })
+      .extend({ version: z.literal(4) })
+      .parse(raw);
+    input = {
+      ...legacy,
+      version: 5,
+      pantones: collectPantones(legacy.orders, legacy.recipes),
+    };
   }
   const b = backupSchema.parse(input);
   const unique = (arr: { id: string }[]) => {
@@ -207,6 +251,7 @@ export function validateBackup(raw: unknown) {
     b.photos,
     b.settings,
     b.orders,
+    b.pantones,
   ].forEach(unique);
   const inks = new Set(b.inks.map((i) => i.id)),
     photos = new Set(b.photos.map((p) => p.id)),
@@ -280,6 +325,14 @@ export function validateBackup(raw: unknown) {
     });
   });
   b.orders.forEach((o) => {
+    unique(o.events || []);
+    if (
+      o.events?.some(
+        (event) =>
+          event.colorId && !o.colors.some((c) => c.id === event.colorId),
+      )
+    )
+      throw Error("Не найден цвет примечания заказа");
     unique(o.colors);
     o.colors.forEach((c) => {
       unique(c.references);
@@ -304,6 +357,21 @@ export function validateBackup(raw: unknown) {
       checkMeasurement(r.measurement);
       if (r.photoIds.some((p) => !photos.has(p)))
         throw Error("Отсутствует фото эталона заказа");
+    });
+  });
+  b.pantones.forEach((p) => {
+    if (p.id !== pantoneKey(p.pantone))
+      throw Error("Некорректный ключ Pantone");
+    unique(p.references);
+    if (
+      p.currentReferenceId &&
+      !p.references.some((r) => r.id === p.currentReferenceId)
+    )
+      throw Error("Не найден эталон в базе Pantone");
+    p.references.forEach((r) => {
+      checkMeasurement(r.measurement);
+      if (r.photoIds.some((id) => !photos.has(id)))
+        throw Error("Отсутствует фото базы Pantone");
     });
   });
   b.profiles.forEach((p) => p.controls.forEach(checkMeasurement));
@@ -332,6 +400,7 @@ export async function importData(raw: unknown, database = db) {
     await database.photos.bulkPut(b.photos);
     await database.settings.bulkPut(b.settings);
     await database.orders.bulkPut(b.orders);
+    await database.pantones.bulkPut(b.pantones);
   });
 }
 export function quality(before: Sample["current"], after: Sample["current"]) {
@@ -367,12 +436,31 @@ export async function saveSample(
     database.batches,
     database.photos,
     database.experiments,
+    database.orders,
     async () => {
       const b = await database.batches.get(batchId);
       if (!b) throw Error("Партия не найдена");
       if (b.status !== "ACTIVE") throw Error("Партия завершена");
+      await requireOpenOrder(b.orderId, database);
+      if (b.samples.some((s) => s.id === sample.id))
+        throw Error("Проба уже сохранена");
+      if (!comparable(sample.target, sample.current))
+        throw Error("Условия эталона и пробы отличаются");
       if (b.orderId && sample.referenceId !== b.referenceId)
         throw Error("Эталон пробы не соответствует запуску заказа");
+      if (b.orderId && b.colorId) {
+        const order = (await database.orders.get(b.orderId))!;
+        const color = order.colors.find((c) => c.id === b.colorId);
+        const reference = color?.references.find(
+          (r) => r.id === color.currentReferenceId,
+        );
+        if (
+          !reference ||
+          reference.id !== sample.referenceId ||
+          reference.measurement.id !== sample.target.id
+        )
+          throw Error("Эталон изменился. Повторите сравнение.");
+      }
       if (
         JSON.stringify(composition(b)) !==
         JSON.stringify(normalize(sample.components))
@@ -406,6 +494,8 @@ export async function saveSample(
         }
       }
       await database.photos.bulkPut(photos);
+      if ((await database.photos.bulkGet(sample.photoIds)).some((p) => !p))
+        throw Error("Фото пробы не найдено");
       sample.additionIds = b.additions.map((a) => a.id);
       b.samples.push(sample);
       await database.batches.put(b);
@@ -419,16 +509,25 @@ export async function addInk(
   comment: string,
   database = db,
 ) {
-  await database.transaction("rw", database.batches, async () => {
-    const b = await database.batches.get(batchId);
-    if (!b) throw Error("Партия не найдена");
-    if (b.status === "DONE") throw Error("Партия завершена");
-    const component = normalize([{ inkId, grams }])[0];
-    if (!component) throw Error("Добавка должна быть больше нуля");
-    b.additions.push({ id: id(), createdAt: now(), component, comment });
-    composition(b);
-    await database.batches.put(b);
-  });
+  await database.transaction(
+    "rw",
+    database.batches,
+    database.orders,
+    database.inks,
+    async () => {
+      const b = await database.batches.get(batchId);
+      if (!b) throw Error("Партия не найдена");
+      if (b.status === "DONE") throw Error("Партия завершена");
+      await requireOpenOrder(b.orderId, database);
+      if (!(await database.inks.get(inkId)))
+        throw Error("Краска не найдена в справочнике");
+      const component = normalize([{ inkId, grams }])[0];
+      if (!component) throw Error("Добавка должна быть больше нуля");
+      b.additions.push({ id: id(), createdAt: now(), component, comment });
+      composition(b);
+      await database.batches.put(b);
+    },
+  );
 }
 export const repeatability = (controls: Sample["current"][]) =>
   Math.max(
@@ -451,6 +550,7 @@ export async function saveOrderReference(
     async () => {
       const order = await database.orders.get(orderId);
       if (!order) throw Error("Заказ не найден");
+      if (order.status === "DONE") throw Error("Заказ закрыт");
       if (order.references.some((old) => old.id === r.id))
         throw Error("Эта версия эталона уже сохранена");
       await database.photos.bulkPut(photos);
@@ -472,6 +572,7 @@ export async function createRun(orderId: string, input: NewRun, database = db) {
     async () => {
       const order = await database.orders.get(orderId);
       if (!order) throw Error("Заказ не найден");
+      if (order.status === "DONE") throw Error("Заказ закрыт");
       const run = makeRun(order, input);
       await database.batches.add(run);
       return run;
@@ -490,16 +591,19 @@ export async function saveColorReference(
     "rw",
     database.orders,
     database.photos,
+    database.pantones,
+    database.batches,
     async () => {
       const order = await database.orders.get(orderId),
         color = order?.colors.find((c) => c.id === colorId);
       if (!order || !color) throw Error("Pantone заказа не найден");
+      if (order.status === "DONE") throw Error("Заказ закрыт");
       if (color.references.some((old) => old.id === r.id))
         throw Error("Эталон уже сохранён");
       await database.photos.bulkPut(photos);
       if ((await database.photos.bulkGet(r.photoIds)).some((p) => !p))
         throw Error("Фото эталона не найдено");
-      color.references.push(r);
+      color.references.push({ ...r, pantone: color.pantone });
       color.currentReferenceId = r.id;
       // Retain the old single-colour fields for compatibility with previous backups.
       if (order.colors[0].id === colorId) {
@@ -507,6 +611,8 @@ export async function saveColorReference(
         order.currentReferenceId = r.id;
       }
       await database.orders.put(order);
+      await mergePantone(color, database);
+      await ensureWorkingBatch(orderId, colorId, database);
     },
   );
 }
@@ -523,17 +629,23 @@ export async function ensureWorkingBatch(
       const order = await database.orders.get(orderId),
         color = order?.colors.find((c) => c.id === colorId);
       if (!order || !color) throw Error("Pantone заказа не найден");
+      if (order.status === "DONE") throw Error("Заказ закрыт");
       const batches = (
         await database.batches.where("colorId").equals(colorId).toArray()
       )
         .filter((b) => b.orderId === orderId && b.status === "ACTIVE")
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       const existing = batches.find(
-        (b) => b.referenceId === (color.currentReferenceId || undefined),
+        (b) =>
+          b.referenceId === (color.currentReferenceId || undefined) &&
+          pantoneKey(b.pantone) === pantoneKey(color.pantone),
       );
       if (existing) return existing;
       const unreferenced = batches.find(
-        (b) => !b.referenceId && !b.samples.length,
+        (b) =>
+          !b.referenceId &&
+          !b.samples.length &&
+          pantoneKey(b.pantone) === pantoneKey(color.pantone),
       );
       if (unreferenced) {
         unreferenced.referenceId = color.currentReferenceId || undefined;
@@ -541,6 +653,16 @@ export async function ensureWorkingBatch(
         return unreferenced;
       }
       const batch = makeWorkingBatch(order, color);
+      // A new target must not silently discard the ink already in the container.
+      const prior = batches.find(
+        (b) => pantoneKey(b.pantone) === pantoneKey(color.pantone),
+      );
+      if (prior) {
+        batch.initial = composition(prior);
+        batch.compositionKnown = prior.compositionKnown;
+      }
+      for (const previous of batches)
+        await database.batches.update(previous.id, { status: "DONE" });
       await database.batches.add(batch);
       return batch;
     },
@@ -559,8 +681,15 @@ export async function setColorComposition(
     "rw",
     database.orders,
     database.batches,
+    database.inks,
     async () => {
       const current = await ensureWorkingBatch(orderId, colorId, database);
+      if (
+        (await database.inks.bulkGet(initial.map((c) => c.inkId))).some(
+          (i) => !i,
+        )
+      )
+        throw Error("Краска не найдена в справочнике");
       if (!current.samples.length && !current.additions.length) {
         current.initial = initial;
         current.compositionKnown = true;
@@ -588,10 +717,12 @@ export async function addComponents(
     "rw",
     database.batches,
     database.inks,
+    database.orders,
     async () => {
       const batch = await database.batches.get(batchId);
       if (!batch || batch.status !== "ACTIVE")
         throw Error("Текущая краска недоступна");
+      await requireOpenOrder(batch.orderId, database);
       if (
         (await database.inks.bulkGet(additions.map((c) => c.inkId))).some(
           (i) => !i,
@@ -611,6 +742,268 @@ export async function addComponents(
       );
       composition(batch);
       await database.batches.put(batch);
+    },
+  );
+}
+
+async function requireOpenOrder(orderId: string | undefined, database: LabDB) {
+  if (!orderId) return;
+  const order = await database.orders.get(orderId);
+  if (!order) throw Error("Заказ не найден");
+  if (order.status === "DONE") throw Error("Заказ закрыт");
+}
+
+async function mergePantone(color: Order["colors"][number], database: LabDB) {
+  const key = pantoneKey(color.pantone);
+  if (!key) throw Error("Укажите Pantone");
+  const existing = await database.pantones.get(key);
+  const entry: Pantone = existing || {
+    ...structuredClone(color),
+    references: [],
+    id: key,
+    createdAt: now(),
+    notes: "",
+  };
+  const added = new Set<string>();
+  for (const r of color.references)
+    if (
+      (!r.pantone || pantoneKey(r.pantone) === key) &&
+      !entry.references.some((old) => old.id === r.id)
+    ) {
+      entry.references.push(structuredClone(r));
+      added.add(r.id);
+    }
+  if (
+    color.currentReferenceId &&
+    (!entry.currentReferenceId || added.has(color.currentReferenceId))
+  )
+    entry.currentReferenceId = color.currentReferenceId;
+  await database.pantones.put(pantoneSchema.parse(entry));
+}
+
+export async function saveOrder(input: Order, database = db) {
+  const order = orderSchema.parse(input);
+  const keys = order.colors.map((c) => pantoneKey(c.pantone));
+  if (!keys.length || keys.some((key) => !key))
+    throw Error("Укажите Pantone заказа");
+  if (new Set(keys).size !== keys.length)
+    throw Error("Этот Pantone уже есть в заказе");
+  for (const color of order.colors) {
+    if (!color.currentReferenceId) continue;
+    const reference = color.references.find(
+      (r) => r.id === color.currentReferenceId,
+    );
+    if (
+      !reference ||
+      (reference.pantone &&
+        pantoneKey(reference.pantone) !== pantoneKey(color.pantone))
+    )
+      throw Error(
+        "Эталон относится к другому Pantone. Выберите эталон этого цвета.",
+      );
+  }
+  await database.transaction(
+    "rw",
+    database.orders,
+    database.pantones,
+    database.batches,
+    async () => {
+      const previous = await database.orders.get(order.id);
+      await requireOpenOrder(previous?.id, database);
+      await database.orders.put(order);
+      for (const color of order.colors) await mergePantone(color, database);
+      for (const color of order.colors) {
+        const old = previous?.colors.find((c) => c.id === color.id);
+        if (
+          old &&
+          color.currentReferenceId &&
+          old.currentReferenceId !== color.currentReferenceId
+        )
+          await ensureWorkingBatch(order.id, color.id, database);
+      }
+    },
+  );
+}
+
+export async function repeatOrder(orderId: string, database = db) {
+  const source = await database.orders.get(orderId);
+  if (!source) throw Error("Заказ не найден");
+  const colors = source.colors.map((color) => ({
+    ...structuredClone(color),
+    id: id(),
+  }));
+  const order: Order = {
+    ...source,
+    id: id(),
+    name: `${source.name} · повтор`,
+    code: "",
+    createdAt: now(),
+    status: "ACTIVE",
+    closedAt: undefined,
+    repeatOf: source.id,
+    colors,
+    events: [
+      {
+        id: id(),
+        createdAt: now(),
+        kind: "STATUS",
+        text: `Повтор заказа «${source.name}». Эталоны сохранены; выкатки начинаются заново.`,
+      },
+    ],
+  };
+  await saveOrder(order, database);
+  return order;
+}
+
+export async function setOrderStatus(
+  orderId: string,
+  status: "ACTIVE" | "DONE",
+  database = db,
+) {
+  await database.transaction("rw", database.orders, async () => {
+    const order = await database.orders.get(orderId);
+    if (!order) throw Error("Заказ не найден");
+    if ((order.status || "ACTIVE") === status) return;
+    order.status = status;
+    order.closedAt = status === "DONE" ? now() : undefined;
+    order.events = [
+      ...(order.events || []),
+      {
+        id: id(),
+        createdAt: now(),
+        kind: "STATUS",
+        text: status === "DONE" ? "Заказ закрыт" : "Заказ возобновлён",
+      },
+    ];
+    await database.orders.put(order);
+  });
+}
+
+export async function addOrderNote(
+  orderId: string,
+  text: string,
+  colorId?: string,
+  database = db,
+) {
+  if (!text.trim()) throw Error("Введите примечание");
+  await database.transaction("rw", database.orders, async () => {
+    const order = await database.orders.get(orderId);
+    if (!order) throw Error("Заказ не найден");
+    if (colorId && !order.colors.some((c) => c.id === colorId))
+      throw Error("Цвет заказа не найден");
+    order.events = [
+      ...(order.events || []),
+      { id: id(), createdAt: now(), kind: "NOTE", text: text.trim(), colorId },
+    ];
+    await database.orders.put(order);
+  });
+}
+
+export async function savePantone(
+  input: Pantone,
+  photos: Photo[] = [],
+  database = db,
+) {
+  const entry = pantoneSchema.parse({
+    ...input,
+    id: pantoneKey(input.pantone),
+    pantone: input.pantone.trim(),
+  });
+  if (!entry.id) throw Error("Укажите Pantone");
+  await database.transaction(
+    "rw",
+    database.pantones,
+    database.photos,
+    async () => {
+      const existing = await database.pantones.get(entry.id);
+      if (existing) {
+        for (const r of existing.references)
+          if (!entry.references.some((v) => v.id === r.id))
+            entry.references.push(r);
+      }
+      await database.photos.bulkPut(photos);
+      for (const r of entry.references)
+        if ((await database.photos.bulkGet(r.photoIds)).some((p) => !p))
+          throw Error("Фото эталона не найдено");
+      if (
+        entry.currentReferenceId &&
+        !entry.references.some((r) => r.id === entry.currentReferenceId)
+      )
+        throw Error("Эталон не найден");
+      await database.pantones.put(entry);
+    },
+  );
+}
+
+export async function useColorReference(
+  orderId: string,
+  colorId: string,
+  referenceId: string,
+  database = db,
+) {
+  await database.transaction(
+    "rw",
+    database.orders,
+    database.pantones,
+    database.batches,
+    async () => {
+      const order = await database.orders.get(orderId),
+        color = order?.colors.find((c) => c.id === colorId);
+      if (!order || !color) throw Error("Цвет заказа не найден");
+      if (order.status === "DONE") throw Error("Заказ закрыт");
+      const entry = await database.pantones.get(pantoneKey(color.pantone));
+      const reference = [
+        ...(entry?.references || []),
+        ...color.references,
+      ].find(
+        (r) =>
+          r.id === referenceId &&
+          (!r.pantone || pantoneKey(r.pantone) === pantoneKey(color.pantone)),
+      );
+      if (!reference) throw Error("Эталон Pantone не найден");
+      if (!color.references.some((r) => r.id === reference.id))
+        color.references.push(structuredClone(reference));
+      color.currentReferenceId = reference.id;
+      order.references = order.colors[0].references;
+      order.currentReferenceId = order.colors[0].currentReferenceId;
+      await database.orders.put(order);
+      await ensureWorkingBatch(orderId, colorId, database);
+    },
+  );
+}
+
+export async function saveSampleRecipe(
+  batchId: string,
+  sampleId: string,
+  database = db,
+) {
+  return database.transaction(
+    "rw",
+    database.batches,
+    database.recipes,
+    async () => {
+      const batch = await database.batches.get(batchId),
+        sample = batch?.samples.find((s) => s.id === sampleId);
+      if (!batch || !sample) throw Error("Выкатка не найдена");
+      if (batch.compositionKnown === false || !sample.components.length)
+        throw Error("Полный состав выкатки неизвестен");
+      const recipeId = `sample-recipe-${sample.id}`;
+      if (await database.recipes.get(recipeId))
+        throw Error("Состав этой выкатки уже сохранён в рецептурах");
+      const recipe: Recipe = {
+        id: recipeId,
+        familyId: recipeId,
+        version: 1,
+        name: `${batch.pantone} · выкатка ${new Date(sample.createdAt).toLocaleDateString("ru")}`,
+        pantone: batch.pantone,
+        source: "OWN",
+        sourceNote:
+          `${batch.name}. Выкатка ${sample.id}. ${sample.comment}`.trim(),
+        components: structuredClone(sample.components),
+        createdAt: now(),
+      };
+      await database.recipes.add(recipe);
+      return recipe;
     },
   );
 }

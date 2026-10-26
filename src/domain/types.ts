@@ -180,6 +180,7 @@ export const orderReferenceSchema = z.object({
   name: z.string().min(1),
   measurement: measurementSchema,
   photoIds: z.array(z.string()),
+  pantone: z.string().optional(),
 });
 export const orderColorSchema = z.object({
   id: z.string().min(1),
@@ -187,6 +188,17 @@ export const orderColorSchema = z.object({
   name: z.string(),
   references: z.array(orderReferenceSchema),
   currentReferenceId: z.string(),
+});
+export const pantoneSchema = orderColorSchema.extend({
+  createdAt: z.string(),
+  notes: z.string(),
+});
+export const orderEventSchema = z.object({
+  id: z.string().min(1),
+  createdAt: z.string(),
+  kind: z.enum(["NOTE", "STATUS"]),
+  text: z.string().min(1),
+  colorId: z.string().optional(),
 });
 export const orderSchema = z.object({
   id: z.string().min(1),
@@ -199,10 +211,14 @@ export const orderSchema = z.object({
   references: z.array(orderReferenceSchema),
   currentReferenceId: z.string(),
   colors: z.array(orderColorSchema).default([]),
+  status: z.enum(["ACTIVE", "DONE"]).optional(),
+  closedAt: z.string().optional(),
+  repeatOf: z.string().optional(),
+  events: z.array(orderEventSchema).optional(),
 });
 export const backupSchema = z.object({
   format: z.literal("FlexoColorLab"),
-  version: z.literal(4),
+  version: z.literal(5),
   exportedAt: z.string(),
   inks: z.array(inkSchema),
   recipes: z.array(recipeSchema),
@@ -212,7 +228,10 @@ export const backupSchema = z.object({
   photos: z.array(photoSchema),
   settings: z.array(settingsSchema),
   orders: z.array(orderSchema),
+  pantones: z.array(pantoneSchema),
 });
+export type Pantone = z.infer<typeof pantoneSchema>;
+export type OrderEvent = z.infer<typeof orderEventSchema>;
 export type Order = z.infer<typeof orderSchema>;
 export type OrderColor = z.infer<typeof orderColorSchema>;
 export type OrderReference = z.infer<typeof orderReferenceSchema>;

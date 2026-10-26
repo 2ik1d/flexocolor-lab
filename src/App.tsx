@@ -23,6 +23,7 @@ import {
   type Profile,
   type Experiment,
   type Settings as SettingsType,
+  type Pantone,
 } from "./domain/types";
 import { Orders } from "./ui/Orders";
 import { useHash } from "./ui/routing";
@@ -30,8 +31,10 @@ import { Compare } from "./ui/Compare";
 import { Batches, Inks, Recipes } from "./ui/Records";
 import { Calibration } from "./ui/Calibration";
 import { Settings } from "./ui/Settings";
+import { Pantones } from "./ui/Pantones";
 type Page =
   | "orders"
+  | "pantones"
   | "quick"
   | "recipes"
   | "batches"
@@ -40,6 +43,7 @@ type Page =
   | "settings";
 const nav = [
   { id: "orders", name: "Заказы", icon: FolderOpen },
+  { id: "pantones", name: "База Pantone", icon: BookOpen },
   { id: "quick", name: "Быстрая приладка", icon: ScanLine },
   { id: "recipes", name: "Рецептуры", icon: BookOpen },
   { id: "batches", name: "История замесов", icon: History },
@@ -63,6 +67,7 @@ export default function App() {
     [recipes, setRecipes] = useState<Recipe[]>([]),
     [batches, setBatches] = useState<Batch[]>([]),
     [orders, setOrders] = useState<Order[]>([]),
+    [pantones, setPantones] = useState<Pantone[]>([]),
     [profiles, setProfiles] = useState<Profile[]>([]),
     [experiments, setExperiments] = useState<Experiment[]>([]),
     [settings, setSettings] = useState<SettingsType>({
@@ -89,7 +94,7 @@ export default function App() {
     void (async () => {
       try {
         await seed();
-        const [i, r, b, p, e, s, o] = await Promise.all([
+        const [i, r, b, p, e, s, o, catalog] = await Promise.all([
           db.inks.toArray(),
           db.recipes.toArray(),
           db.batches.orderBy("createdAt").reverse().toArray(),
@@ -97,11 +102,13 @@ export default function App() {
           db.experiments.toArray(),
           db.settings.get("settings"),
           db.orders.toArray(),
+          db.pantones.toArray(),
         ]);
         setInks(i);
         setRecipes(r);
         setBatches(b);
         setOrders(o);
+        setPantones(catalog);
         setProfiles(p);
         setExperiments(e);
         if (s) setSettings(s);
@@ -215,7 +222,17 @@ export default function App() {
                 batches={batches}
                 settings={settings}
                 experiments={experiments}
+                pantones={pantones}
+                recipes={recipes}
                 onSuccess={onSuccess}
+              />
+            )}
+            {page === "pantones" && (
+              <Pantones
+                pantones={pantones}
+                settings={settings}
+                onChange={onChange}
+                onError={onError}
               />
             )}
             {page === "quick" && (
@@ -234,7 +251,9 @@ export default function App() {
                 experiments={experiments}
               />
             )}
-            {page === "recipes" && <Recipes {...shared} recipes={recipes} />}
+            {page === "recipes" && (
+              <Recipes {...shared} recipes={recipes} pantones={pantones} />
+            )}
             {page === "inks" && <Inks {...shared} />}
             {page === "calibration" && (
               <Calibration

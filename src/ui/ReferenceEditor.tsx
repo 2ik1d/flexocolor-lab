@@ -64,12 +64,19 @@ export function ReferenceEditor({
         </div>
         {kind === "lab" && (
           <>
-            <ConditionsEditor value={conditions} onChange={setConditions} />
+            <ConditionsEditor
+              value={conditions}
+              onChange={(value) => {
+                setConditions(value);
+                setMeasurement(undefined);
+              }}
+            />
             <SpectroInput
               title="Эталон заказа"
               conditions={conditions}
               onMeasurement={setMeasurement}
               onError={onError}
+              onInvalidate={() => setMeasurement(undefined)}
             />
           </>
         )}

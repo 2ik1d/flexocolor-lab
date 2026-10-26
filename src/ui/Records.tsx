@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Plus, ArrowLeft, Beaker, Check, Copy } from "lucide-react";
-import { db, addInk } from "../storage/db";
+import { db, addInk, savePantone } from "../storage/db";
+import { pantoneKey } from "../domain/pantones";
 import {
   id,
   now,
@@ -10,6 +11,7 @@ import {
   type Component,
   type Experiment,
   recipeSchema,
+  type Pantone,
   batchSchema,
   inkSchema,
 } from "../domain/types";
@@ -451,7 +453,11 @@ export function SamplePhotos({
     </div>
   );
 }
-export function Recipes({ recipes, ...props }: Shared & { recipes: Recipe[] }) {
+export function Recipes({
+  recipes,
+  pantones = [],
+  ...props
+}: Shared & { recipes: Recipe[]; pantones?: Pantone[] }) {
   const [editing, setEditing] = useState<Recipe | null>(),
     [name, setName] = useState(""),
     [pantone, setPantone] = useState(""),
@@ -493,7 +499,26 @@ export function Recipes({ recipes, ...props }: Shared & { recipes: Recipe[] }) {
         components,
         createdAt: now(),
       });
-      await db.recipes.put(r);
+      await db.transaction(
+        "rw",
+        db.recipes,
+        db.pantones,
+        db.photos,
+        async () => {
+          await db.recipes.put(r);
+          const key = pantoneKey(r.pantone);
+          if (key && !(await db.pantones.get(key)))
+            await savePantone({
+              id: key,
+              pantone: r.pantone.trim(),
+              name: "",
+              notes: "",
+              createdAt: now(),
+              references: [],
+              currentReferenceId: "",
+            });
+        },
+      );
       setEditing(undefined);
       props.onChange();
     } catch (e) {
@@ -526,9 +551,15 @@ export function Recipes({ recipes, ...props }: Shared & { recipes: Recipe[] }) {
             </Field>
             <Field label="Pantone">
               <input
+                list="recipe-pantones"
                 value={pantone}
                 onChange={(e) => setPantone(e.target.value)}
               />
+              <datalist id="recipe-pantones">
+                {pantones.map((p) => (
+                  <option key={p.id} value={p.pantone} />
+                ))}
+              </datalist>
             </Field>
             <Field label="Тип источника">
               <select

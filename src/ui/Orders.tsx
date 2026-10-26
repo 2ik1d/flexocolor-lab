@@ -8,6 +8,11 @@ import {
   setColorComposition,
   addComponents,
   saveSample,
+  saveOrder,
+  repeatOrder,
+  setOrderStatus,
+  useColorReference,
+  saveSampleRecipe,
 } from "../storage/db";
 import {
   id,
@@ -21,6 +26,8 @@ import {
   type Component,
   type Experiment,
   type Measurement,
+  type Pantone,
+  type Recipe,
 } from "../domain/types";
 import { composition, total } from "../domain/mixture";
 import { progress } from "../domain/progress";
@@ -36,12 +43,17 @@ import {
   ConditionsEditor,
 } from "./common";
 import { ProgressReport } from "./ProgressReport";
+import { pantoneKey } from "../domain/pantones";
+import { OrderHistory } from "./OrderHistory";
+import { RecipeStarter } from "./RecipeStarter";
 interface Props {
   orders: Order[];
   batches: Batch[];
   inks: Ink[];
   settings: Settings;
   experiments: Experiment[];
+  pantones: Pantone[];
+  recipes: Recipe[];
   onChange: () => void;
   onError: (s: string) => void;
   onSuccess: (s: string) => void;
@@ -54,10 +66,22 @@ const newColor = (): OrderColor => ({
   currentReferenceId: "",
 });
 export function Orders(props: Props) {
-  const path = useHash().slice(1).split("/"),
+  const hash = useHash(),
+    query = new URLSearchParams(hash.split("?")[1]),
+    path = hash.split("?")[0].slice(1).split("/"),
     order = props.orders.find((o) => o.id === path[1]);
-  const [creating, setCreating] = useState(false),
-    [search, setSearch] = useState("");
+  const [creating, setCreating] = useState(!!query.get("pantone")),
+    [search, setSearch] = useState(""),
+    [status, setStatus] = useState("all");
+  async function repeat(orderId: string) {
+    try {
+      const copy = await repeatOrder(orderId);
+      props.onChange();
+      location.hash = `orders/${copy.id}`;
+    } catch (e) {
+      props.onError((e as Error).message);
+    }
+  }
   if (order)
     return (
       <OrderWorkspace
@@ -79,10 +103,12 @@ export function Orders(props: Props) {
       </section>
     );
   const list = props.orders
-    .filter((o) =>
-      `${o.name} ${o.code} ${o.customer} ${o.colors.map((c) => c.pantone).join(" ")}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
+    .filter(
+      (o) =>
+        (status === "all" || (o.status || "ACTIVE") === status) &&
+        `${o.name} ${o.code} ${o.customer} ${o.colors.map((c) => c.pantone).join(" ")}`
+          .toLowerCase()
+          .includes(search.toLowerCase()),
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return (
@@ -100,6 +126,8 @@ export function Orders(props: Props) {
       </div>
       {creating && (
         <OrderForm
+          pantones={props.pantones}
+          initialPantone={query.get("pantone") || ""}
           onClose={() => setCreating(false)}
           onError={props.onError}
           onSave={async (values) => {
@@ -108,16 +136,33 @@ export function Orders(props: Props) {
               id: id(),
               createdAt: now(),
               pantone: first.pantone,
-              references: [],
-              currentReferenceId: "",
+              references: first.references,
+              currentReferenceId: first.currentReferenceId,
               ...values,
             });
-            await db.orders.add(order);
+            await saveOrder(order);
             props.onChange();
             setCreating(false);
             location.hash = `orders/${order.id}`;
           }}
         />
+      )}
+      {!!props.orders.length && (
+        <div className="segmented" aria-label="Статус заказов">
+          {[
+            ["all", "Все"],
+            ["ACTIVE", "В работе"],
+            ["DONE", "Закрытые"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              className={status === value ? "active" : ""}
+              onClick={() => setStatus(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       )}
       {!!props.orders.length && (
         <input
@@ -130,14 +175,13 @@ export function Orders(props: Props) {
       )}
       <div className="record-grid">
         {list.map((o) => (
-          <a
-            className="record card order-record"
-            key={o.id}
-            href={`#orders/${o.id}`}
-          >
+          <article className="record card order-record" key={o.id}>
             <div className="card-heading">
               <FolderOpen size={22} />
               <small>{o.code || "Без номера"}</small>
+              <span className="tag">
+                {o.status === "DONE" ? "Закрыт" : "В работе"}
+              </span>
             </div>
             <h3>{o.name}</h3>
             {o.customer && <p>{o.customer}</p>}
@@ -157,9 +201,20 @@ export function Orders(props: Props) {
               </span>
               <ArrowRight size={18} />
             </div>
-          </a>
+            <div className="actions">
+              <a className="button-link" href={`#orders/${o.id}`}>
+                Просмотреть <ArrowRight size={16} />
+              </a>
+              <button className="secondary" onClick={() => void repeat(o.id)}>
+                Повторить
+              </button>
+            </div>
+          </article>
         ))}
       </div>
+      {!!props.orders.length && !list.length && (
+        <p>Заказы по этому запросу не найдены.</p>
+      )}
       {!props.orders.length && !creating && (
         <section className="card empty-state">
           <FolderOpen size={40} />
@@ -180,11 +235,15 @@ type OrderFields = Pick<
 >;
 function OrderForm({
   order,
+  pantones,
+  initialPantone = "",
   onSave,
   onError,
   onClose,
 }: {
   order?: Order;
+  pantones: Pantone[];
+  initialPantone?: string;
   onSave: (v: OrderFields) => Promise<void>;
   onError: (s: string) => void;
   onClose: () => void;
@@ -193,7 +252,9 @@ function OrderForm({
     [code, setCode] = useState(order?.code || ""),
     [customer, setCustomer] = useState(order?.customer || ""),
     [colors, setColors] = useState<OrderColor[]>(
-      order?.colors.map((c) => ({ ...c })) || [newColor()],
+      order?.colors.map((c) => ({ ...c })) || [
+        { ...newColor(), pantone: initialPantone },
+      ],
     ),
     [busy, setBusy] = useState(false);
   return (
@@ -214,20 +275,102 @@ function OrderForm({
         </Field>
       </div>
       <h4>Pantone в заказе</h4>
+      <p className="hint">
+        Выберите из базы или введите новый номер. Новый Pantone сохранится в
+        справочнике вместе с заказом.
+      </p>
+      <datalist id="order-pantones">
+        {pantones.map((p) => (
+          <option key={p.id} value={p.pantone}>
+            {p.currentReferenceId ? "Есть эталон" : "Без эталона"}
+          </option>
+        ))}
+      </datalist>
       {colors.map((c, i) => (
         <div className="pantone-edit-row" key={c.id}>
           <Field label={`Pantone ${i + 1}`}>
             <input
+              list="order-pantones"
               placeholder="185 C"
               value={c.pantone}
               onChange={(e) =>
                 setColors((cs) =>
                   cs.map((v) =>
-                    v.id === c.id ? { ...v, pantone: e.target.value } : v,
+                    v.id === c.id
+                      ? {
+                          ...v,
+                          pantone: e.target.value,
+                          references: v.references.map((r) => ({
+                            ...r,
+                            pantone: r.pantone || v.pantone,
+                          })),
+                          currentReferenceId: "",
+                        }
+                      : v,
                   ),
                 )
               }
             />
+          </Field>
+          <Field label={`Эталон Pantone ${i + 1}`}>
+            <select
+              aria-label={`Эталон Pantone ${i + 1}`}
+              value={c.currentReferenceId || ""}
+              onChange={(e) => {
+                const entry = pantones.find(
+                  (p) => p.id === pantoneKey(c.pantone),
+                );
+                const reference = [
+                  ...c.references,
+                  ...(entry?.references || []),
+                ].find(
+                  (r) =>
+                    r.id === e.target.value &&
+                    (!r.pantone ||
+                      pantoneKey(r.pantone) === pantoneKey(c.pantone)),
+                );
+                setColors((cs) =>
+                  cs.map((v) =>
+                    v.id === c.id
+                      ? {
+                          ...v,
+                          currentReferenceId: reference?.id || "",
+                          references:
+                            reference &&
+                            !v.references.some((r) => r.id === reference.id)
+                              ? [...v.references, structuredClone(reference)]
+                              : v.references,
+                        }
+                      : v,
+                  ),
+                );
+              }}
+            >
+              <option value="">Новый — загрузить после создания</option>
+              {[
+                ...new Map(
+                  [
+                    ...(pantones.find((p) => p.id === pantoneKey(c.pantone))
+                      ?.references || []),
+                    ...c.references.filter(
+                      (r) =>
+                        (!r.pantone ||
+                          pantoneKey(r.pantone) === pantoneKey(c.pantone)) &&
+                        order?.colors.some(
+                          (old) =>
+                            old.id === c.id &&
+                            pantoneKey(old.pantone) === pantoneKey(c.pantone) &&
+                            old.references.some((ref) => ref.id === r.id),
+                        ),
+                    ),
+                  ].map((r) => [r.id, r]),
+                ).values(),
+              ].map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name} · {date(r.createdAt)}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field label={`Где используется ${i + 1}`}>
             <input
@@ -269,6 +412,11 @@ function OrderForm({
               if (!name.trim()) throw Error("Введите название заказа");
               if (colors.some((c) => !c.pantone.trim()))
                 throw Error("Укажите номера Pantone");
+              if (
+                new Set(colors.map((c) => pantoneKey(c.pantone))).size !==
+                colors.length
+              )
+                throw Error("Этот Pantone уже есть в заказе");
               await onSave({
                 name: name.trim(),
                 code,
@@ -300,7 +448,21 @@ function OrderWorkspace({
   selectedId,
   ...props
 }: Props & { order: Order; selectedId?: string }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(false),
+    [tab, setTab] = useState<"work" | "history">("work"),
+    [busy, setBusy] = useState(false);
+  const closed = order.status === "DONE";
+  async function action(work: () => Promise<void>) {
+    setBusy(true);
+    try {
+      await work();
+      props.onChange();
+    } catch (e) {
+      props.onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   const color =
     order.colors.find((c) => c.id === selectedId) || order.colors[0];
   return (
@@ -316,57 +478,137 @@ function OrderWorkspace({
               "ЗАКАЗ"}
           </div>
           <h1>{order.name}</h1>
+          <span className="tag">{closed ? "Заказ закрыт" : "В работе"}</span>
+          {order.repeatOf && (
+            <p>
+              <a href={`#orders/${order.repeatOf}`}>Исходный заказ</a>
+            </p>
+          )}
         </div>
-        <button className="secondary" onClick={() => setEditing(!editing)}>
-          Изменить / добавить Pantone
-        </button>
+        <div className="actions order-actions">
+          {!closed && (
+            <button className="secondary" onClick={() => setEditing(!editing)}>
+              Изменить / добавить Pantone
+            </button>
+          )}
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() =>
+              void action(async () => {
+                const copy = await repeatOrder(order.id);
+                location.hash = `orders/${copy.id}`;
+              })
+            }
+          >
+            Повторить заказ
+          </button>
+          <button
+            disabled={busy}
+            onClick={() =>
+              void action(async () => {
+                await setOrderStatus(order.id, closed ? "ACTIVE" : "DONE");
+                setEditing(false);
+                props.onSuccess(
+                  closed
+                    ? "Заказ возобновлён"
+                    : "Заказ закрыт. История сохранена.",
+                );
+              })
+            }
+          >
+            {closed ? "Возобновить заказ" : "Закрыть заказ"}
+          </button>
+        </div>
       </div>
       {editing && (
         <OrderForm
           order={order}
+          pantones={props.pantones}
           onError={props.onError}
           onClose={() => setEditing(false)}
           onSave={async (values) => {
-            await db.transaction("rw", db.orders, async () => {
-              const latest = (await db.orders.get(order.id))!;
-              const colors = values.colors.map((c) => {
-                const old = latest.colors.find((v) => v.id === c.id);
-                return old
-                  ? {
-                      ...old,
-                      pantone: c.pantone,
-                      name: c.name,
-                      currentReferenceId:
-                        old.pantone === c.pantone ? old.currentReferenceId : "",
-                    }
-                  : c;
-              });
-              await db.orders.put({
-                ...latest,
-                ...values,
-                colors,
-                pantone: colors.map((c) => c.pantone).join(", "),
-              });
+            const latest = (await db.orders.get(order.id))!;
+            const colors = values.colors.map((c) => {
+              const old = latest.colors.find((v) => v.id === c.id);
+              return old
+                ? {
+                    ...old,
+                    pantone: c.pantone,
+                    name: c.name,
+                    references: [
+                      ...new Map(
+                        [
+                          ...old.references.map((r) => ({
+                            ...r,
+                            pantone: r.pantone || old.pantone,
+                          })),
+                          ...c.references,
+                        ].map((r) => [r.id, r]),
+                      ).values(),
+                    ],
+                    currentReferenceId: c.currentReferenceId,
+                  }
+                : c;
+            });
+            await saveOrder({
+              ...latest,
+              ...values,
+              colors,
+              pantone: colors.map((c) => c.pantone).join(", "),
+              references: colors[0].references,
+              currentReferenceId: colors[0].currentReferenceId,
             });
             setEditing(false);
             props.onChange();
           }}
         />
       )}
-      <nav className="pantone-tabs" aria-label="Pantone заказа">
-        {order.colors.map((c) => (
-          <a
-            className={c.id === color?.id ? "active" : ""}
-            href={`#orders/${order.id}/colors/${c.id}`}
-            key={c.id}
-          >
-            {c.pantone}
-            {c.name && <small>{c.name}</small>}
-          </a>
-        ))}
-      </nav>
-      {color && (
-        <ColorWorkspace key={color.id} {...props} order={order} color={color} />
+      <div className="segmented" aria-label="Раздел заказа">
+        <button
+          className={tab === "work" ? "active" : ""}
+          onClick={() => setTab("work")}
+        >
+          Эталон и выкатки
+        </button>
+        <button
+          className={tab === "history" ? "active" : ""}
+          onClick={() => setTab("history")}
+        >
+          История заказа
+        </button>
+      </div>
+      {tab === "history" ? (
+        <OrderHistory
+          order={order}
+          batches={props.batches.filter((b) => b.orderId === order.id)}
+          inks={props.inks}
+          onChange={props.onChange}
+          onError={props.onError}
+        />
+      ) : (
+        <>
+          <nav className="pantone-tabs" aria-label="Pantone заказа">
+            {order.colors.map((c) => (
+              <a
+                className={c.id === color?.id ? "active" : ""}
+                href={`#orders/${order.id}/colors/${c.id}`}
+                key={c.id}
+              >
+                {c.pantone}
+                {c.name && <small>{c.name}</small>}
+              </a>
+            ))}
+          </nav>
+          {color && (
+            <ColorWorkspace
+              key={`${color.id}-${color.pantone}-${color.currentReferenceId}-${closed}`}
+              {...props}
+              order={order}
+              color={color}
+            />
+          )}
+        </>
       )}
     </>
   );
@@ -386,6 +628,9 @@ function ColorWorkspace({
       { inkId: props.inks[0]?.id || "", grams: "" },
     ]),
     [comment, setComment] = useState(""),
+    [sampleComment, setSampleComment] = useState(""),
+    [catalogReference, setCatalogReference] = useState(""),
+    [inputVersion, setInputVersion] = useState(0),
     [candidate, setCandidate] = useState<Measurement>(),
     [photo, setPhoto] = useState<PhotoSelection["photo"]>(),
     [busy, setBusy] = useState(false),
@@ -401,6 +646,19 @@ function ColorWorkspace({
   const reference = color.references.find(
     (r) => r.id === color.currentReferenceId,
   );
+  const closed = order.status === "DONE";
+  const availableReferences = [
+    ...new Map(
+      [
+        ...(props.pantones.find((p) => p.id === pantoneKey(color.pantone))
+          ?.references || []),
+        ...color.references.filter(
+          (r) =>
+            !r.pantone || pantoneKey(r.pantone) === pantoneKey(color.pantone),
+        ),
+      ].map((r) => [r.id, r]),
+    ).values(),
+  ];
   const batches = props.batches
     .filter((b) => b.orderId === order.id && b.colorId === color.id)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -413,11 +671,13 @@ function ColorWorkspace({
       (b) => b.status === "ACTIVE" && !b.referenceId && !b.samples.length,
     );
   const samples = batches
-    .flatMap((b) => b.samples.map((s) => ({ sample: s, batch: b })))
+    .flatMap((b) =>
+      [...b.samples].reverse().map((s) => ({ sample: s, batch: b })),
+    )
     .sort((a, b) => b.sample.createdAt.localeCompare(a.sample.createdAt));
   const latest = samples[0];
   const previous = candidate
-    ? samples.find((s) => s.sample.id !== savedId)
+    ? samples.find((s) => s.batch.id === active?.id && s.sample.id !== savedId)
     : undefined;
   const report =
     reference && candidate
@@ -453,6 +713,18 @@ function ColorWorkspace({
   }
   return (
     <div className="color-workspace">
+      <div className="workflow-strip">
+        <span>1 · Эталон</span>
+        <span>2 · Выкатка</span>
+        <span>3 · Сравнение и советы</span>
+        <span>4 · Добавка → новая выкатка</span>
+      </div>
+      {closed && (
+        <p className="notice">
+          Заказ закрыт{order.closedAt ? ` · ${date(order.closedAt)}` : ""}.
+          Эталоны, выкатки и результаты доступны для просмотра.
+        </p>
+      )}
       <section className="card target-strip">
         <div>
           <div className="eyebrow">ЭТАЛОН · {color.pantone}</div>
@@ -470,19 +742,69 @@ function ColorWorkspace({
                 ids={reference.photoIds}
                 autoLoad
               />
+              <details>
+                <summary>
+                  Просмотреть эталон и его версии ({color.references.length})
+                </summary>
+                {[...color.references].reverse().map((r) => (
+                  <div key={r.id}>
+                    <p>
+                      {r.name} · {date(r.createdAt)}
+                      {r.id === reference.id ? " · Текущий" : ""}
+                    </p>
+                    <MeasurementCard
+                      title="Эталон"
+                      measurement={r.measurement}
+                    />
+                    <SamplePhotos ids={r.photoIds} />
+                  </div>
+                ))}
+              </details>
             </>
           ) : (
             <p>Загрузите эталон этого Pantone и выделите цветовой участок.</p>
           )}
         </div>
         <button
+          disabled={closed || busy}
           className={reference ? "secondary" : ""}
           onClick={() => setEditingReference(!editingReference)}
         >
           {reference ? "Заменить эталон" : "Добавить эталон"}
         </button>
       </section>
-      {editingReference && (
+      {!closed && availableReferences.length > 0 && (
+        <details className="card reference-picker">
+          <summary>Выбрать сохранённый эталон из базы Pantone</summary>
+          <Field label="Сохранённый эталон">
+            <select
+              value={catalogReference}
+              onChange={(e) => setCatalogReference(e.target.value)}
+            >
+              <option value="">Выберите версию</option>
+              {availableReferences.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name} · {date(r.createdAt)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <button
+            disabled={
+              busy || !catalogReference || catalogReference === reference?.id
+            }
+            onClick={() =>
+              void attempt(async () => {
+                await useColorReference(order.id, color.id, catalogReference);
+                props.onSuccess("Эталон из базы выбран");
+              })
+            }
+          >
+            Использовать эталон
+          </button>
+        </details>
+      )}
+      {editingReference && !closed && (
         <ReferenceEditor
           settings={props.settings}
           onError={props.onError}
@@ -500,6 +822,24 @@ function ColorWorkspace({
       )}
       <div className="bench-grid">
         <div className="stack">
+          {!closed && (
+            <RecipeStarter
+              color={color}
+              recipes={props.recipes}
+              batches={props.batches}
+              inks={props.inks}
+              onError={props.onError}
+              onUse={(components) => {
+                setInitial(components);
+                document
+                  .querySelector<HTMLDetailsElement>(".mixture-panel details")
+                  ?.setAttribute("open", "");
+                props.onSuccess(
+                  "Рецептура подставлена. Проверьте и сохраните фактический состав.",
+                );
+              }}
+            />
+          )}
           <section className="card mixture-panel">
             <div className="card-heading">
               <h3>Что есть в краске</h3>
@@ -532,71 +872,91 @@ function ColorWorkspace({
                   />
                 </>
               )}
-            <details>
-              <summary>
-                {active
-                  ? "Краска изменилась / указать новый исходный состав"
-                  : "Указать исходный состав (если известен)"}
-              </summary>
-              <p className="hint">
-                Если эту краску меняли на другом заказе, введите, что сейчас в
-                ёмкости. Прошлые пробы останутся в истории.
-              </p>
+            {!closed && (
+              <details>
+                <summary>
+                  {active &&
+                  (active.samples.length > 0 ||
+                    active.additions.length > 0 ||
+                    active.compositionKnown !== false)
+                    ? "Краска изменилась / указать новый исходный состав"
+                    : "Указать исходный состав (если известен)"}
+                </summary>
+                <p className="hint">
+                  Если эту краску меняли на другом заказе, введите, что сейчас в
+                  ёмкости. Прошлые пробы останутся в истории.
+                </p>
+                <ComponentsEditor
+                  value={initial}
+                  onChange={setInitial}
+                  inks={props.inks}
+                />
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() =>
+                    void attempt(async () => {
+                      await setColorComposition(order.id, color.id, initial);
+                      setCandidate(undefined);
+                      setPhoto(undefined);
+                      setSampleComment("");
+                      setInputVersion((v) => v + 1);
+                      setSavedId("");
+                      props.onSuccess("Исходный состав сохранён");
+                    })
+                  }
+                >
+                  Сохранить исходный состав
+                </button>
+              </details>
+            )}
+          </section>
+          {!closed && (
+            <section className="card addition-panel">
+              <h3>Что добавил</h3>
               <ComponentsEditor
-                value={initial}
-                onChange={setInitial}
+                value={additions}
+                onChange={setAdditions}
                 inks={props.inks}
               />
+              <Field label="Заметка к добавке">
+                <input
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                />
+              </Field>
               <button
-                className="secondary"
-                disabled={busy}
+                disabled={busy || !reference}
                 onClick={() =>
                   void attempt(async () => {
-                    await setColorComposition(order.id, color.id, initial);
+                    const batch = await ensureWorkingBatch(order.id, color.id);
+                    await addComponents(batch.id, additions, comment);
+                    setAdditions([
+                      { inkId: props.inks[0]?.id || "", grams: "" },
+                    ]);
+                    setComment("");
                     setCandidate(undefined);
+                    setPhoto(undefined);
+                    setSampleComment("");
+                    setInputVersion((v) => v + 1);
                     setSavedId("");
-                    props.onSuccess("Исходный состав сохранён");
+                    props.onSuccess(
+                      "Добавки записаны. Выкатайте и загрузите новую пробу.",
+                    );
                   })
                 }
               >
-                Сохранить исходный состав
+                Записать добавки
               </button>
-            </details>
-          </section>
-          <section className="card addition-panel">
-            <h3>Что добавил</h3>
-            <ComponentsEditor
-              value={additions}
-              onChange={setAdditions}
-              inks={props.inks}
-            />
-            <Field label="Заметка к добавке">
-              <input
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-              />
-            </Field>
-            <button
-              disabled={busy}
-              onClick={() =>
-                void attempt(async () => {
-                  const batch = await ensureWorkingBatch(order.id, color.id);
-                  await addComponents(batch.id, additions, comment);
-                  setAdditions([{ inkId: props.inks[0]?.id || "", grams: "" }]);
-                  setComment("");
-                  setCandidate(undefined);
-                  setSavedId("");
-                  props.onSuccess(
-                    "Добавки записаны. Выкатайте и загрузите новую пробу.",
-                  );
-                })
-              }
-            >
-              Записать добавки
-            </button>
-          </section>
-          {reference && (
-            <>
+              {!reference && (
+                <p className="hint">
+                  Сначала сохраните или выберите эталон Pantone.
+                </p>
+              )}
+            </section>
+          )}
+          {reference && !closed && (
+            <fieldset className="sample-input" disabled={busy}>
               <div className="sample-section-heading">
                 <h3>
                   {samples.length
@@ -617,6 +977,7 @@ function ColorWorkspace({
               </div>
               {mode === "photo" ? (
                 <PhotoEditor
+                  key={inputVersion}
                   compact
                   label="Новая проба"
                   onAnalyze={receive}
@@ -630,7 +991,11 @@ function ColorWorkspace({
                 <section className="card">
                   <ConditionsEditor
                     value={conditions}
-                    onChange={setConditions}
+                    onChange={(value) => {
+                      setConditions(value);
+                      setCandidate(undefined);
+                      setSavedId("");
+                    }}
                   />
                   <SpectroInput
                     title="Новая проба"
@@ -641,14 +1006,54 @@ function ColorWorkspace({
                       setSavedId("");
                     }}
                     onError={props.onError}
+                    onInvalidate={() => {
+                      setCandidate(undefined);
+                      setSavedId("");
+                    }}
                   />
                 </section>
               )}
-            </>
+              <Field label="Что вышло / примечание к выкатке">
+                <textarea
+                  value={sampleComment}
+                  onChange={(e) => setSampleComment(e.target.value)}
+                  disabled={!!savedId}
+                  placeholder="Оценка результата, условия, решение…"
+                />
+              </Field>
+            </fieldset>
           )}
         </div>
         <aside className="stack bench-results" id={"comparison-" + color.id}>
-          {candidate && reference && (
+          {latest &&
+            (!candidate || savedId === latest.sample.id) &&
+            latest.batch.compositionKnown !== false &&
+            latest.sample.components.length > 0 && (
+              <button
+                className="secondary"
+                disabled={
+                  busy ||
+                  props.recipes.some(
+                    (r) => r.id === `sample-recipe-${latest.sample.id}`,
+                  )
+                }
+                onClick={() =>
+                  void attempt(async () => {
+                    await saveSampleRecipe(latest.batch.id, latest.sample.id);
+                    props.onSuccess(
+                      "Состав выкатки сохранён в рецептурах этого Pantone",
+                    );
+                  })
+                }
+              >
+                {props.recipes.some(
+                  (r) => r.id === `sample-recipe-${latest.sample.id}`,
+                )
+                  ? "Состав выкатки уже в рецептурах"
+                  : "Сохранить состав выкатки в рецептуры"}
+              </button>
+            )}
+          {candidate && reference && !closed && (
             <button
               className="wide"
               disabled={busy || !!savedId || !report?.toTarget}
@@ -671,7 +1076,7 @@ function ColorWorkspace({
                         ]),
                       ],
                       components: composition(batch),
-                      comment: "",
+                      comment: sampleComment.trim(),
                       additionIds: [],
                     },
                     photo ? [photo] : [],
@@ -703,7 +1108,13 @@ function ColorWorkspace({
               <ProgressReport
                 target={reference.measurement}
                 current={latest.sample.current}
-                previous={samples[1]?.sample}
+                previous={
+                  samples.find(
+                    (s) =>
+                      s.batch.id === latest.batch.id &&
+                      s.sample.id !== latest.sample.id,
+                  )?.sample
+                }
                 changes={latest.batch.additions.filter(
                   (a) =>
                     latest.sample.additionIds?.includes(a.id) &&
@@ -740,7 +1151,16 @@ function ColorWorkspace({
                 : `Исходная масса ${total(b.initial)} г`}
             </h3>
             {b.initial.length > 0 && (
-              <Composition value={b.initial} inks={props.inks} />
+              <Composition
+                value={b.initial}
+                inks={props.inks}
+                showPercent={b.compositionKnown !== false}
+                totalLabel={
+                  b.compositionKnown === false
+                    ? "Известные компоненты"
+                    : "Исходная масса"
+                }
+              />
             )}
             <div className="timeline">
               {[
@@ -778,6 +1198,11 @@ function ColorWorkspace({
                             event.value.current,
                           ).toTarget?.de00.toFixed(2) ?? "условия различаются"}
                         </h4>
+                        {event.value.comment && (
+                          <p className="preserve-lines">
+                            {event.value.comment}
+                          </p>
+                        )}
                         <details>
                           <summary>Фото, измерение и состав</summary>
                           <MeasurementCard

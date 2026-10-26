@@ -168,6 +168,7 @@ test("фото без известного состава: две пробы, н
   await additions
     .getByRole("button", { name: "Записать добавки", exact: true })
     .click();
+  await expect(page.getByRole("alert")).toContainText("Добавки записаны");
   await analyze("#8c5f3a");
   await expect(
     page.getByText("Ближе к эталону", { exact: true }),
@@ -242,5 +243,249 @@ test("Pantone добавляются и изменяются в существу
   ).toBeVisible();
   await expect(page.locator(".color-history summary").first()).toContainText(
     "проб: 1",
+  );
+  await page
+    .getByRole("button", { name: "Изменить / добавить Pantone", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Эталон Pantone 1", { exact: true }).locator("option"),
+  ).toHaveCount(1);
+});
+
+test("примечания отдельным пунктом, результат добавки, закрытие и повтор с эталоном", async ({
+  page,
+}, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await create(page, ["185 C"]);
+  const sourceUrl = page.url();
+  await referenceLab(page);
+  await page
+    .getByRole("button", { name: "Ввести Lab / CSV", exact: true })
+    .click();
+  await currentLab(page, "40");
+  await page
+    .getByLabel("Что вышло / примечание к выкатке", { exact: true })
+    .fill("Темнее эталона, первая выкатка");
+  await save(page);
+  const additions = page.locator(".addition-panel");
+  await additions.getByLabel("Масса 1", { exact: true }).fill("10");
+  await additions.getByLabel("Заметка к добавке").fill("Пробуем осветлить");
+  await additions
+    .getByRole("button", { name: "Записать добавки", exact: true })
+    .click();
+  await currentLab(page, "48");
+  await page
+    .getByLabel("Что вышло / примечание к выкатке", { exact: true })
+    .fill("Стало ближе, согласовать");
+  await save(page);
+  await page
+    .getByRole("button", { name: "История заказа", exact: true })
+    .click();
+  const history = page.locator(".order-history");
+  await history
+    .getByLabel("Примечание к заказу", { exact: true })
+    .fill("Печатаем после согласования");
+  await history
+    .getByLabel("К какому цвету относится")
+    .selectOption({ label: "185 C" });
+  await history
+    .getByRole("button", { name: "Сохранить примечание", exact: true })
+    .click();
+  await expect(history.locator('[data-event="addition"]')).toHaveCount(1);
+  await expect(history.locator('[data-event="sample"]')).toHaveCount(2);
+  await expect(history.locator('[data-event="addition"]')).toContainText(
+    "Результат записан",
+  );
+  await history
+    .getByRole("button", { name: "Примечания (4)", exact: true })
+    .click();
+  await expect(history.locator(".timeline article")).toHaveCount(4);
+  await expect(history).toContainText("Стало ближе, согласовать");
+  await page.getByRole("button", { name: "Закрыть уведомление" }).click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({
+    path: info.outputPath("order-notes-mobile.png"),
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page
+    .getByRole("button", { name: "Закрыть заказ", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Эталон и выкатки", exact: true })
+    .click();
+  await expect(page.locator(".addition-panel")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Заменить эталон", exact: true }),
+  ).toBeDisabled();
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Возобновить заказ", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Повторить заказ", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "ТЕСТ Этикетка · повтор", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Заменить эталон", exact: true }),
+  ).toBeEnabled();
+  await expect(page.locator(".color-history summary").first()).toContainText(
+    "проб: 0",
+  );
+  await expect(page.locator(".mass-badge")).toHaveText("Масса неизвестна");
+  await page.goto(sourceUrl);
+  await expect(page.locator(".color-history summary").first()).toContainText(
+    "проб: 2",
+  );
+  await expect(
+    page.getByRole("button", { name: "Возобновить заказ", exact: true }),
+  ).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("Pantone из заказа появляется в базе и списках нового заказа; сохранённый эталон доступен для выбора", async ({
+  page,
+}, info) => {
+  await create(page, ["185 C"]);
+  await referenceLab(page);
+  await page.goto(BASE + "#pantones");
+  await page.getByRole("button", { name: /185 C.*Просмотреть/ }).click();
+  await expect(page.getByLabel("Карточка Pantone 185 C")).toContainText(
+    "Текущий эталон",
+  );
+  await page
+    .getByRole("link", { name: "Создать заказ с этим Pantone", exact: true })
+    .click();
+  await expect(page.getByLabel("Pantone 1", { exact: true })).toHaveValue(
+    "185 C",
+  );
+  await expect(page.locator("#order-pantones option")).toHaveAttribute(
+    "value",
+    "185 C",
+  );
+  await page
+    .getByLabel("Название заказа", { exact: true })
+    .fill("Другой заказ с эталоном");
+  const referenceSelect = page.getByLabel("Эталон Pantone 1", { exact: true });
+  await referenceSelect.selectOption({ index: 1 });
+  await page.getByRole("button", { name: "Закрыть уведомление" }).click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({
+    path: info.outputPath("order-reference-picker.png"),
+    fullPage: true,
+  });
+  await page
+    .getByRole("button", { name: "Сохранить заказ", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Другой заказ с эталоном", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Заменить эталон", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".reference-editor")).toHaveCount(0);
+  await expect(page.locator(".color-history summary").first()).toContainText(
+    "проб: 0",
+  );
+});
+
+test("дубликаты Pantone отклоняются, базу можно пополнять вручную", async ({
+  page,
+}) => {
+  await page.goto(BASE + "#pantones");
+  await page
+    .getByRole("button", { name: "Добавить Pantone", exact: true })
+    .click();
+  await page.getByLabel("Номер Pantone", { exact: true }).fill("300 C");
+  await page.getByLabel("Примечание к Pantone").fill("Синий клиента");
+  await page
+    .getByRole("button", { name: "Сохранить Pantone", exact: true })
+    .click();
+  await expect(page.getByLabel("Карточка Pantone 300 C")).toContainText(
+    "Синий клиента",
+  );
+  await page.goto(BASE + "#orders");
+  await page.getByRole("button", { name: "Новый заказ", exact: true }).click();
+  await page.getByLabel("Название заказа", { exact: true }).fill("Дубликаты");
+  await page.getByLabel("Pantone 1", { exact: true }).fill("300 C");
+  await page.getByRole("button", { name: "Ещё Pantone", exact: true }).click();
+  await page.getByLabel("Pantone 2", { exact: true }).fill(" PANTONE 300   c ");
+  await page
+    .getByRole("button", { name: "Сохранить заказ", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("уже есть в заказе");
+  await expect(page.locator(".order-form")).toBeVisible();
+});
+
+test("состав выкатки становится рецептурой для повтора, замена эталона сохраняет массу, правка Lab сбрасывает результат", async ({
+  page,
+}) => {
+  await create(page, ["185 C"]);
+  await referenceLab(page);
+  const mixture = page.locator(".mixture-panel");
+  await mixture
+    .getByText("Указать исходный состав (если известен)", { exact: true })
+    .click();
+  await mixture.getByLabel("Масса 1", { exact: true }).fill("1000");
+  await mixture
+    .getByRole("button", { name: "Сохранить исходный состав", exact: true })
+    .click();
+  await expect(mixture.locator(".mass-badge")).toHaveText("1000 г");
+  await page
+    .getByRole("button", { name: "Ввести Lab / CSV", exact: true })
+    .click();
+  await currentLab(page, "48");
+  await page.getByLabel("Новая проба L*", { exact: true }).fill("49");
+  await expect(
+    page.getByRole("button", { name: "Сохранить пробу", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Принять Lab", exact: true }).click();
+  await save(page);
+  await page
+    .getByRole("button", {
+      name: "Сохранить состав выкатки в рецептуры",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("button", {
+      name: "Состав выкатки уже в рецептурах",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Повторить заказ", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "ТЕСТ Этикетка · повтор", exact: true }),
+  ).toBeVisible();
+  const starter = page.locator(".recipe-starter");
+  await starter.locator("summary").first().click();
+  await expect(starter).toContainText("Собственная рецептура");
+  await starter.getByLabel("Масса исходного замеса, г").fill("500");
+  await starter
+    .getByRole("button", { name: "Подставить состав в форму", exact: true })
+    .click();
+  await expect(mixture.getByLabel("Масса 1", { exact: true })).toHaveValue(
+    "500",
+  );
+  await mixture
+    .getByRole("button", { name: "Сохранить исходный состав", exact: true })
+    .click();
+  await expect(mixture.locator(".mass-badge")).toHaveText("500 г");
+  await page
+    .getByRole("button", { name: "Заменить эталон", exact: true })
+    .click();
+  await referenceLab(page, "60");
+  await expect(mixture.locator(".mass-badge")).toHaveText("500 г");
+  await expect(page.locator(".color-history summary").first()).toContainText(
+    "проб: 0",
   );
 });

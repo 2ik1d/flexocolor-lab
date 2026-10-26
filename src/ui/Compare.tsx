@@ -12,6 +12,7 @@ import type {
 import { id, now, labSchema } from "../domain/types";
 import { composition, total } from "../domain/mixture";
 import { difference } from "../color/color";
+import { comparable } from "../domain/progress";
 import { ColorCorrectionEngine } from "../correction/engine";
 import { saveSample } from "../storage/db";
 import { parseMeasurements } from "../measurements/csv";
@@ -107,11 +108,7 @@ export function Compare({
     setSaved(false);
   }
   const batch = batches.find((b) => b.id === batchId);
-  const compatible =
-    target &&
-    current &&
-    JSON.stringify(target.conditions) === JSON.stringify(current.conditions) &&
-    target.source.startsWith("PHOTO") === current.source.startsWith("PHOTO");
+  const compatible = target && current && comparable(target, current);
   const diff = compatible ? difference(target.lab, current.lab) : undefined;
   function receive(a: PhotoSelection, b?: PhotoSelection, isCurrent = false) {
     const withConditions = (m: Measurement): Measurement => ({
@@ -282,6 +279,7 @@ export function Compare({
                   />
                   <SpectroInput
                     title="Оттиск"
+                    onInvalidate={() => invalidate("current")}
                     conditions={conditions}
                     onMeasurement={(m) => {
                       setCurrent(m);
@@ -332,6 +330,7 @@ export function Compare({
               <ConditionsEditor value={conditions} onChange={setConditions} />
               <SpectroInput
                 title="Эталон"
+                onInvalidate={() => invalidate("target")}
                 conditions={conditions}
                 onMeasurement={(m) => {
                   setTarget(m);
@@ -341,6 +340,7 @@ export function Compare({
               />
               <SpectroInput
                 title="Оттиск"
+                onInvalidate={() => invalidate("current")}
                 conditions={conditions}
                 onMeasurement={(m) => {
                   setCurrent(m);
@@ -492,11 +492,13 @@ export function SpectroInput({
   conditions,
   onMeasurement,
   onError,
+  onInvalidate,
 }: {
   title: string;
   conditions: Conditions;
   onMeasurement: (m: Measurement) => void;
   onError: (s: string) => void;
+  onInvalidate?: () => void;
 }) {
   const [values, setValues] = useState(["", "", ""]);
   return (
@@ -509,9 +511,10 @@ export function SpectroInput({
               aria-label={`${title} ${s}`}
               inputMode="decimal"
               value={values[i]}
-              onChange={(e) =>
-                setValues(values.map((v, j) => (i === j ? e.target.value : v)))
-              }
+              onChange={(e) => {
+                setValues(values.map((v, j) => (i === j ? e.target.value : v)));
+                onInvalidate?.();
+              }}
             />
           </Field>
         ))}
@@ -520,6 +523,7 @@ export function SpectroInput({
         <button
           className="secondary"
           onClick={() => {
+            onInvalidate?.();
             try {
               if (values.some((v) => !v.trim()))
                 throw Error("Заполните все координаты Lab");
@@ -546,6 +550,7 @@ export function SpectroInput({
             accept=".csv,text/csv"
             aria-label={`CSV ${title}`}
             onChange={async (e) => {
+              onInvalidate?.();
               try {
                 const f = e.target.files?.[0];
                 if (!f) return;
