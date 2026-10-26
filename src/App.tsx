@@ -28,7 +28,8 @@ import {
 import { Orders } from "./ui/Orders";
 import { useHash } from "./ui/routing";
 import { Compare } from "./ui/Compare";
-import { Batches, Inks, Recipes } from "./ui/Records";
+import { Batches, Inks } from "./ui/Records";
+import { Recipes } from "./ui/Recipes";
 import { Calibration } from "./ui/Calibration";
 import { Settings } from "./ui/Settings";
 import { Pantones } from "./ui/Pantones";
@@ -176,7 +177,7 @@ export default function App() {
               Ваши данные — на устройстве<small>IndexedDB · без аккаунта</small>
             </div>
           </div>
-          <span className="version">FLEXOCOLOR LAB / 1.0</span>
+          <span className="version">FLEXOCOLOR LAB / 1.1</span>
         </div>
       </aside>
       {menu && <div className="scrim" onClick={() => setMenu(false)} />}

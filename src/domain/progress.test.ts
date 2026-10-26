@@ -17,6 +17,15 @@ const sample = (current: Measurement): Sample => ({
   components: [],
   comment: "",
 });
+it("порядок полей одинаковых условий не влияет на сравнение", () => {
+  const current = measurement(48);
+  current.conditions = Object.fromEntries(
+    Object.entries(defaultConditions).reverse(),
+  ) as Measurement["conditions"];
+  const result = progress(measurement(50), current, sample(measurement(40)));
+  expect(result.toTarget).toBeDefined();
+  expect(result.trend).toBe("CLOSER");
+});
 it("показывает обе разницы и приближение к эталону", () => {
   const r = progress(measurement(50), measurement(48), sample(measurement(40)));
   expect(r.trend).toBe("CLOSER");

@@ -4,6 +4,7 @@ import { pantoneKey } from "../domain/pantones";
 import { Composition, date } from "./common";
 import { MeasurementCard } from "./Compare";
 import { SamplePhotos } from "./Records";
+import { RecipeMix } from "./RecipeMix";
 export function ColorKnowledge({
   pantone,
   pantones,
@@ -63,13 +64,8 @@ export function ColorKnowledge({
             <summary>
               {r.name} · версия {r.version}
             </summary>
-            <Composition value={r.components} inks={inks} />
             <p className="hint">{r.sourceNote || "Собственный состав"}</p>
-            {onUse && (
-              <button className="secondary" onClick={() => onUse(r.components)}>
-                Взять исходный состав
-              </button>
-            )}
+            <RecipeMix recipe={r} inks={inks} onUse={onUse} />
           </details>
         ))
       ) : entry?.startingComponents?.length ? (

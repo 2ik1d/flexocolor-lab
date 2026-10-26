@@ -429,6 +429,12 @@ it("повтор переносит исходную чистую краску, 
   const { d, order, color } = await setup(),
     r = ref();
   order.colors[0].startingComponents = [{ inkId: "double-v-0", grams: "1000" }];
+  order.production = {
+    material: "BOPP",
+    anilox: "160",
+    uv: "LED",
+    speed: "80",
+  };
   await saveOrder(order, d);
   await saveColorReference(order.id, color.id, r, [], d);
   const batch = await ensureWorkingBatch(order.id, color.id, d);
@@ -440,6 +446,7 @@ it("повтор переносит исходную чистую краску, 
   expect(batches[0].additions).toEqual([]);
   expect(batches[0].samples).toEqual([]);
   expect(repeat.code).toBe(order.code);
+  expect(repeat.production).toEqual(order.production);
   expect(repeat.colors[0].currentReferenceId).toBe(r.id);
   expect(repeat.colors[0].acceptedSampleId).toBeUndefined();
   await d.delete();
@@ -575,4 +582,54 @@ it("заказ завершается только после подтвержд
   expect((await d.orders.get(order.id))!.status).toBe("DONE");
   validateBackup(await exportData(d));
   await d.delete();
+});
+
+it("при завершении сохраняет подтверждённый полный состав, а в повторе остаётся чистый исходный", async () => {
+  const { d, order, color } = await setup(),
+    r = ref();
+  try {
+    order.colors[0].startingComponents = [
+      { inkId: "double-v-0", grams: "100" },
+    ];
+    await saveOrder(order, d);
+    await saveColorReference(order.id, color.id, r, [], d);
+    const batch = await ensureWorkingBatch(order.id, color.id, d);
+    const putSample = async (sampleId: string) => {
+      const latest = (await d.batches.get(batch.id))!;
+      await saveSample(
+        batch.id,
+        {
+          id: sampleId,
+          createdAt: now(),
+          target: r.measurement,
+          current: m(49),
+          referenceId: r.id,
+          photoIds: [],
+          components: composition(latest),
+          comment: "Подтверждённый тестовый результат",
+        },
+        [],
+        d,
+      );
+    };
+    await putSample(id());
+    await addComponents(
+      batch.id,
+      [{ inkId: "double-v-1", grams: "10" }],
+      "",
+      d,
+    );
+    const accepted = id();
+    await putSample(accepted);
+    await acceptOrderColor(order.id, color.id, accepted, d);
+    await finishOrder(order.id, d);
+    const recipe = (await d.recipes.get(`sample-recipe-${accepted}`))!;
+    expect(total(recipe.components)).toBe("110");
+    expect(recipe.sourceNote).toContain("Подтверждённый тестовый результат");
+    const repeated = await repeatOrder(order.id, d);
+    expect(total(repeated.colors[0].startingComponents!)).toBe("100");
+    validateBackup(await exportData(d));
+  } finally {
+    await d.delete();
+  }
 });

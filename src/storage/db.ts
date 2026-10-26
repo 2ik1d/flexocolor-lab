@@ -23,7 +23,7 @@ import {
   type Pantone,
 } from "../domain/types";
 import { collectPantones, pantoneKey } from "../domain/pantones";
-import { comparable } from "../domain/progress";
+import { comparable, sameConditions } from "../domain/progress";
 import {
   migrateLegacyBatches,
   makeRun,
@@ -43,6 +43,7 @@ export class LabDB extends Dexie {
   settings!: Table<Settings, string>;
   orders!: Table<Order, string>;
   pantones!: Table<Pantone, string>;
+  drafts!: Table<{ id: string; value: unknown }, string>;
   constructor(name = "FlexoColorLab") {
     super(name);
     this.version(1).stores({
@@ -97,6 +98,7 @@ export class LabDB extends Dexie {
         const recipes = await tx.table<Recipe>("recipes").toArray();
         await tx.table("pantones").bulkPut(collectPantones(orders, recipes));
       });
+    this.version(6).stores({ drafts: "id" });
   }
 }
 export const db = new LabDB();
@@ -420,7 +422,7 @@ export function quality(before: Sample["current"], after: Sample["current"]) {
   if (!before.conditions.setup.trim() || !after.conditions.setup.trim())
     warnings.push("Не указан идентификатор измерительной установки");
   if (
-    JSON.stringify(before.conditions) !== JSON.stringify(after.conditions) ||
+    !sameConditions(before.conditions, after.conditions) ||
     before.profileId !== after.profileId ||
     before.calibrationId !== after.calibrationId ||
     before.source !== after.source
@@ -671,7 +673,11 @@ export async function ensureWorkingBatch(
         await database.batches.put(unreferenced);
         return unreferenced;
       }
-      const batch = makeWorkingBatch(order, color);
+      const batch = makeWorkingBatch(
+        order,
+        color,
+        color.startingComponents || [],
+      );
       // A new target must not silently discard the ink already in the container.
       const prior = batches.find(
         (b) => pantoneKey(b.pantone) === pantoneKey(color.pantone),
@@ -869,7 +875,15 @@ export async function saveOrder(input: Order, database = db) {
             components,
             createdAt: now(),
           });
-          if (!old)
+          const componentKey = (cs: Component[]) =>
+            JSON.stringify(
+              normalize(cs).sort((a, b) => a.inkId.localeCompare(b.inkId)),
+            );
+          if (
+            !old ||
+            componentKey(old.startingComponents || []) !==
+              componentKey(components)
+          )
             await setColorComposition(order.id, color.id, components, database);
         }
         if (
@@ -1031,6 +1045,7 @@ export async function finishOrder(orderId: string, database = db) {
     "rw",
     database.orders,
     database.batches,
+    database.recipes,
     async () => {
       const order = await database.orders.get(orderId);
       if (
@@ -1039,13 +1054,31 @@ export async function finishOrder(orderId: string, database = db) {
         order.colors.some((c) => !c.acceptedSampleId)
       )
         throw Error("Подтвердите результат каждого Pantone");
-      for (const color of order.colors)
+      for (const color of order.colors) {
         await acceptOrderColor(
           order.id,
           color.id,
           color.acceptedSampleId!,
           database,
         );
+        const batch = (
+          await database.batches.where("colorId").equals(color.id).toArray()
+        ).find(
+          (b) =>
+            b.orderId === order.id &&
+            b.samples.some((s) => s.id === color.acceptedSampleId),
+        );
+        const sample = batch?.samples.find(
+          (s) => s.id === color.acceptedSampleId,
+        );
+        if (
+          batch &&
+          batch.compositionKnown !== false &&
+          sample?.components.length &&
+          !(await database.recipes.get(`sample-recipe-${sample.id}`))
+        )
+          await saveSampleRecipe(batch.id, sample.id, database);
+      }
       await setOrderStatus(orderId, "DONE", database);
     },
   );

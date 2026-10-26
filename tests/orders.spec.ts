@@ -90,7 +90,32 @@ test("новый заказ: номер, информация, количест�
   );
   await reference(page);
   await rollout(page, "40");
+  await page
+    .getByLabel("Что получилось / заметка", { exact: true })
+    .fill("Черновик до сохранения");
+  await page.getByRole("link", { name: "← Заказы", exact: true }).click();
+  await page
+    .locator(".operator-order-record")
+    .getByRole("link", { name: "Открыть и посмотреть историю", exact: true })
+    .click();
+  await expect(
+    page.getByRole("tab", { name: "Анализ", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByLabel("Что получилось / заметка", { exact: true }),
+  ).toHaveValue("Черновик до сохранения");
+  await page.reload();
+  await expect(
+    page.getByLabel("Что получилось / заметка", { exact: true }),
+  ).toHaveValue("Черновик до сохранения");
   await save(page);
+  await page.reload();
+  await expect(
+    page.getByRole("tab", { name: "Анализ", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByRole("button", { name: "Выкатка сохранена", exact: true }),
+  ).toBeDisabled();
   await page
     .getByRole("navigation", { name: "Pantone заказа" })
     .getByRole("button", { name: /^6225 C/ })
@@ -146,6 +171,9 @@ test("полный цикл: добавки, прошлая выкатка, де
   );
   await rollout(page, "48");
   await expect(page.locator(".trend-card")).toContainText("Ближе к эталону");
+  await expect(
+    page.getByLabel("Прогресс доводки", { exact: true }),
+  ).toBeVisible();
   await expect(page.locator(".delta-metrics").first()).toContainText("ΔE76");
   await expect(page.locator(".delta-metrics").first()).toContainText("ΔL*");
   await expect(page.locator(".comparison-report")).toContainText(
@@ -177,6 +205,18 @@ test("полный цикл: добавки, прошлая выкатка, де
     "В пределах",
     "подтверждён",
   ]);
+  await page.getByRole("tab", { name: "Новая выкатка", exact: true }).click();
+  await rollout(page, "49");
+  await expect(
+    page.getByRole("button", {
+      name: "Подтвердить и завершить заказ",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await save(page);
+  await page
+    .getByRole("button", { name: "Цвет устроил — подтвердить", exact: true })
+    .click();
   await page
     .getByRole("button", { name: "Подтвердить и завершить заказ", exact: true })
     .click();
@@ -358,6 +398,12 @@ test("фото: эталон, выкатка, сравнение, заметки
   await page
     .getByRole("button", { name: "Анализировать области", exact: true })
     .click();
+  const draftUrl = page.url();
+  await page.goto(BASE + "#orders");
+  await page.goto(draftUrl);
+  await expect(
+    page.getByRole("tab", { name: "Анализ", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
   await save(page);
   await page
     .getByRole("button", { name: "Весь журнал и примечания", exact: true })

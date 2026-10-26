@@ -226,6 +226,14 @@ export const orderSchema = z.object({
   repeatOf: z.string().optional(),
   events: z.array(orderEventSchema).optional(),
   tolerance: z.number().positive().optional(),
+  production: z
+    .object({
+      material: z.string(),
+      anilox: z.string(),
+      uv: z.string(),
+      speed: z.string(),
+    })
+    .optional(),
 });
 export const backupSchema = z.object({
   format: z.literal("FlexoColorLab"),

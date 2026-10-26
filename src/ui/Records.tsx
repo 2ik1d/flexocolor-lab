@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { Plus, ArrowLeft, Beaker, Check, Copy } from "lucide-react";
-import { db, addInk, savePantone } from "../storage/db";
-import { pantoneKey } from "../domain/pantones";
+import { Plus, ArrowLeft, Beaker, Check } from "lucide-react";
+import { db, addInk } from "../storage/db";
 import {
   id,
   now,
@@ -10,12 +9,10 @@ import {
   type Recipe,
   type Component,
   type Experiment,
-  recipeSchema,
-  type Pantone,
   batchSchema,
   inkSchema,
 } from "../domain/types";
-import { composition, total, normalize, scale } from "../domain/mixture";
+import { composition, total, normalize } from "../domain/mixture";
 import { difference } from "../color/color";
 import { ComponentsEditor, Composition, Field, Notice, date } from "./common";
 import { MeasurementCard } from "./Compare";
@@ -452,209 +449,6 @@ export function SamplePhotos({
       )}
     </div>
   );
-}
-export function Recipes({
-  recipes,
-  pantones = [],
-  ...props
-}: Shared & { recipes: Recipe[]; pantones?: Pantone[] }) {
-  const [editing, setEditing] = useState<Recipe | null>(),
-    [name, setName] = useState(""),
-    [pantone, setPantone] = useState(""),
-    [source, setSource] = useState<Recipe["source"]>("OWN"),
-    [sourceNote, setSourceNote] = useState(""),
-    [cs, setCs] = useState<Component[]>([]),
-    [target, setTarget] = useState("1000");
-  function open(r: Recipe | null) {
-    setEditing(r);
-    setName(r?.name || "");
-    setPantone(r?.pantone || "");
-    setSource(r?.source || "OWN");
-    setSourceNote(r?.sourceNote || "");
-    setCs(r?.components || [{ inkId: props.inks[0]?.id || "", grams: "1000" }]);
-  }
-  async function save(newVersion: boolean) {
-    try {
-      const components = normalize(cs);
-      if (!Number(total(components))) throw Error("Введите состав");
-      if (source !== "OWN" && !sourceNote.trim())
-        throw Error("Укажите проверяемый источник рецептуры");
-      const familyId = editing?.familyId || id();
-      const r = recipeSchema.parse({
-        id: !newVersion && editing ? editing.id : id(),
-        familyId,
-        version: editing
-          ? newVersion
-            ? Math.max(
-                ...recipes
-                  .filter((r) => r.familyId === familyId)
-                  .map((r) => r.version),
-              ) + 1
-            : editing.version
-          : 1,
-        name,
-        pantone,
-        source,
-        sourceNote,
-        components,
-        createdAt: now(),
-      });
-      await db.transaction(
-        "rw",
-        db.recipes,
-        db.pantones,
-        db.photos,
-        async () => {
-          await db.recipes.put(r);
-          const key = pantoneKey(r.pantone);
-          if (key && !(await db.pantones.get(key)))
-            await savePantone({
-              id: key,
-              pantone: r.pantone.trim(),
-              name: "",
-              notes: "",
-              createdAt: now(),
-              references: [],
-              currentReferenceId: "",
-            });
-        },
-      );
-      setEditing(undefined);
-      props.onChange();
-    } catch (e) {
-      props.onError((e as Error).message);
-    }
-  }
-  return (
-    <>
-      <div className="page-heading">
-        <div>
-          <div className="eyebrow">БИБЛИОТЕКА СОСТАВОВ</div>
-          <h1>Рецептуры</h1>
-          <p>Проверяемый источник и отдельные версии каждого состава.</p>
-        </div>
-        <button onClick={() => open(null)}>
-          <Plus size={18} />
-          Новая рецептура
-        </button>
-      </div>
-      {editing !== undefined && (
-        <section className="card">
-          <h3>{editing ? "Редактирование рецептуры" : "Новая рецептура"}</h3>
-          <div className="form-grid">
-            <Field label="Название рецептуры">
-              <input
-                aria-label="Название рецептуры"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </Field>
-            <Field label="Pantone">
-              <input
-                list="recipe-pantones"
-                value={pantone}
-                onChange={(e) => setPantone(e.target.value)}
-              />
-              <datalist id="recipe-pantones">
-                {pantones.map((p) => (
-                  <option key={p.id} value={p.pantone} />
-                ))}
-              </datalist>
-            </Field>
-            <Field label="Тип источника">
-              <select
-                value={source}
-                onChange={(e) => setSource(e.target.value as Recipe["source"])}
-              >
-                <option value="OWN">Собственная производственная</option>
-                <option value="SUPPLIER">Рецептура поставщика</option>
-                <option value="PANTONE">Официальная Pantone</option>
-              </select>
-            </Field>
-            <Field label="Источник / документ / примечание">
-              <input
-                value={sourceNote}
-                onChange={(e) => setSourceNote(e.target.value)}
-              />
-            </Field>
-          </div>
-          <ComponentsEditor value={cs} onChange={setCs} inks={props.inks} />
-          <SafeComposition cs={cs} inks={props.inks} />
-          <div className="actions">
-            <Field label="Масштабировать до, г">
-              <input
-                aria-label="Масштабировать до, г"
-                inputMode="decimal"
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-              />
-            </Field>
-            <button
-              className="secondary"
-              onClick={() => {
-                try {
-                  setCs(scale(cs, target));
-                } catch (e) {
-                  props.onError((e as Error).message);
-                }
-              }}
-            >
-              Пересчитать
-            </button>
-          </div>
-          <div className="actions">
-            <button onClick={() => void save(false)}>
-              Сохранить рецептуру
-            </button>
-            {editing && (
-              <button className="secondary" onClick={() => void save(true)}>
-                <Copy size={17} />
-                Сохранить новой версией
-              </button>
-            )}
-            <button className="subtle" onClick={() => setEditing(undefined)}>
-              Закрыть
-            </button>
-          </div>
-        </section>
-      )}
-      <div className="record-grid">
-        {recipes.map((r) => (
-          <button className="record card" onClick={() => open(r)} key={r.id}>
-            <div className="card-heading">
-              <span className="tag">v{r.version}</span>
-              <small>
-                {r.source === "OWN"
-                  ? "Собственная"
-                  : r.source === "SUPPLIER"
-                    ? "Поставщик"
-                    : "Pantone"}
-              </small>
-            </div>
-            <h3>{r.name}</h3>
-            <p>{r.pantone}</p>
-            <Composition value={r.components} inks={props.inks} />
-            <small>
-              {r.sourceNote ||
-                "Источник: собственная производственная рецептура"}
-            </small>
-          </button>
-        ))}
-      </div>
-      {!recipes.length && (
-        <Notice>
-          Рецептур пока нет. Непроверенные формулы Pantone в базу не включены.
-        </Notice>
-      )}
-    </>
-  );
-}
-function SafeComposition({ cs, inks }: { cs: Component[]; inks: Ink[] }) {
-  try {
-    return <Composition value={normalize(cs)} inks={inks} />;
-  } catch {
-    return <p className="hint">Введите массы до 3 знаков после запятой.</p>;
-  }
 }
 export function Inks(props: Shared) {
   const [editing, setEditing] = useState<Ink>();

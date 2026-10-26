@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { z } from "zod";
 import type { OrderProps } from "./Orders";
 import { OrderForm } from "./Orders";
 import {
@@ -7,6 +8,8 @@ import {
   type Measurement,
   type Photo,
   type OrderColor,
+  measurementSchema,
+  photoSchema,
   id,
   now,
 } from "../domain/types";
@@ -42,13 +45,28 @@ import {
 import { OrderHistory } from "./OrderHistory";
 import { ColorKnowledge } from "./ColorKnowledge";
 import { SamplePhotos } from "./Records";
+import { colorWorkflow } from "../domain/workflow";
+import { TrialTrend } from "./TrialTrend";
+import { ProductionSheet } from "./ProductionSheet";
+import { RecipeStarter } from "./RecipeStarter";
+import { useUnsavedWarning } from "./useFormDraft";
 type Step = "reference" | "rollout" | "analysis" | "additions";
 type Draft = {
   measurement?: Measurement;
   photo?: Photo;
   comment?: string;
   savedId?: string;
+  context?: string;
 };
+const workspaceDraftSchema = z.record(
+  z.string(),
+  z.object({
+    measurement: measurementSchema.optional(),
+    photo: photoSchema.optional(),
+    comment: z.string().optional(),
+    context: z.string(),
+  }),
+);
 export function OperatorWorkspace({
   order,
   initialColorId,
@@ -60,28 +78,32 @@ export function OperatorWorkspace({
   onRepeat: () => Promise<void>;
 }) {
   const own = props.batches.filter((b) => b.orderId === order.id);
-  const [selected, setSelected] = useState(
-      initialColorId || order.colors[0]?.id,
-    ),
+  const initialColor =
+    order.colors.find((c) => c.id === initialColorId) || order.colors[0];
+  const initialWorkflow = colorWorkflow(initialColor, own);
+  const [selected, setSelected] = useState(initialColor.id),
     [stage, setStage] = useState<1 | 2>(
-      own.some((b) => b.additions.length) ? 2 : 1,
+      initialWorkflow.batch?.additions.length ? 2 : 1,
     ),
     [step, setStep] = useState<Step>(
-      order.colors.find(
-        (c) => c.id === initialColorId || c.id === order.colors[0]?.id,
-      )?.currentReferenceId
-        ? "rollout"
-        : "reference",
+      initialWorkflow.state === "accepted" ? "analysis" : initialWorkflow.state,
     ),
     [drafts, setDrafts] = useState<Record<string, Draft>>({}),
+    [draftsReady, setDraftsReady] = useState(false),
+    [draftFailed, setDraftFailed] = useState(false),
     [busy, setBusy] = useState(false),
     [editing, setEditing] = useState(false),
     [journal, setJournal] = useState(false),
     [replace, setReplace] = useState(false),
     [mode, setMode] = useState<"photo" | "lab">("photo"),
-    [conditions, setConditions] = useState(props.settings.conditions),
+    [conditions, setConditions] = useState(
+      initialColor.references.find(
+        (r) => r.id === initialColor.currentReferenceId,
+      )?.measurement.conditions || props.settings.conditions,
+    ),
     [referenceChoice, setReferenceChoice] = useState(""),
     [initial, setInitial] = useState<Component[]>(),
+    [printing, setPrinting] = useState(false),
     [rows, setRows] = useState<
       {
         id: string;
@@ -114,8 +136,79 @@ export function OperatorWorkspace({
       ? active?.samples.filter((s) => s.id !== draft.savedId).at(-1)
       : active?.samples.at(-2);
   const current = draft.measurement || latest?.current;
+  const draftErrorShown = useRef(false);
+  function draftContext(colorId: string) {
+    const color = order.colors.find((c) => c.id === colorId);
+    if (!color) return "";
+    const batch = colorWorkflow(color, own).batch;
+    return JSON.stringify([
+      color.currentReferenceId,
+      batch?.id,
+      batch?.samples.at(-1)?.id,
+      batch?.additions.map((a) => a.id),
+    ]);
+  }
+  useEffect(() => {
+    let mounted = true;
+    void db.drafts
+      .get(`workspace:${order.id}`)
+      .then((record) => {
+        if (!mounted) return;
+        const parsed = workspaceDraftSchema.safeParse(record?.value);
+        if (parsed.success && !closed) {
+          const restored = Object.fromEntries(
+            Object.entries(parsed.data).filter(
+              ([colorId, value]) => value.context === draftContext(colorId),
+            ),
+          );
+          setDrafts(restored);
+          if (restored[selected]?.measurement) setStep("analysis");
+        }
+      })
+      .catch(() => {
+        /* Draft failure must not hide saved production data. */
+      })
+      .finally(() => {
+        if (mounted) setDraftsReady(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [order.id]);
+  useEffect(() => {
+    if (!draftsReady) return;
+    const unsaved = Object.fromEntries(
+      Object.entries(drafts).filter(
+        ([, value]) => value.measurement && !value.savedId,
+      ),
+    );
+    const write = Object.keys(unsaved).length
+      ? db.drafts.put({ id: `workspace:${order.id}`, value: unsaved })
+      : db.drafts.delete(`workspace:${order.id}`);
+    void Promise.resolve(write)
+      .then(() => setDraftFailed(false))
+      .catch(() => {
+        setDraftFailed(true);
+        if (!draftErrorShown.current) {
+          draftErrorShown.current = true;
+          props.onError(
+            "Черновик выкатки не сохранён: проверьте свободное место. Сохраните результат перед выходом.",
+          );
+        }
+      });
+  }, [drafts, draftsReady, order.id]);
+  const hasUnsaved = Object.values(drafts).some(
+    (value) => !!value.measurement && !value.savedId,
+  );
+  useUnsavedWarning(hasUnsaved && draftFailed);
   const pending =
     active?.additions.filter((a) => !latest?.additionIds?.includes(a.id)) || [];
+  const displayedSaved =
+    !!draft.savedId || (!draft.measurement && !!latest && !pending.length);
+  const displayedAccepted =
+    !!color.acceptedSampleId &&
+    displayedSaved &&
+    (!draft.savedId || draft.savedId === color.acceptedSampleId);
   const changes =
     active?.additions.filter(
       (a) =>
@@ -138,7 +231,16 @@ export function OperatorWorkspace({
     ).values(),
   ];
   function patch(values: Partial<Draft>, colorId = color.id) {
-    setDrafts((all) => ({ ...all, [colorId]: { ...all[colorId], ...values } }));
+    setDrafts((all) => ({
+      ...all,
+      [colorId]: {
+        ...all[colorId],
+        ...values,
+        context: values.measurement
+          ? draftContext(colorId)
+          : all[colorId]?.context || draftContext(colorId),
+      },
+    }));
   }
   async function perform(action: () => Promise<void>) {
     if (busy) return;
@@ -161,6 +263,16 @@ export function OperatorWorkspace({
     if (!reference) throw Error("Нет эталона");
     const batch = await ensureWorkingBatch(order.id, color.id),
       sampleId = id();
+    const liveContext = JSON.stringify([
+      reference.id,
+      batch.id,
+      batch.samples.at(-1)?.id,
+      batch.additions.map((a) => a.id),
+    ]);
+    if (draft.context && draft.context !== liveContext)
+      throw Error(
+        "Состав или эталон изменились после измерения. Загрузите новую выкатку.",
+      );
     await saveSample(
       batch.id,
       {
@@ -194,12 +306,14 @@ export function OperatorWorkspace({
         b.status === "ACTIVE" &&
         b.referenceId === c.currentReferenceId,
     );
+    setStage(working?.additions.length ? 2 : 1);
+    const workflow = colorWorkflow(c, own);
     setStep(
-      !c.currentReferenceId
-        ? "reference"
-        : working?.samples.length
+      drafts[c.id]?.measurement
+        ? "analysis"
+        : workflow.state === "accepted"
           ? "analysis"
-          : "rollout",
+          : workflow.state,
     );
     setConditions(
       c.references.find((r) => r.id === c.currentReferenceId)?.measurement
@@ -223,6 +337,12 @@ export function OperatorWorkspace({
     });
     setStep("analysis");
   }
+  if (!draftsReady)
+    return (
+      <section className="card">
+        <p>Открываем заказ и сохранённый черновик…</p>
+      </section>
+    );
   if (editing)
     return (
       <OrderForm
@@ -287,6 +407,9 @@ export function OperatorWorkspace({
           </p>
         </div>
         <div className="actions">
+          <button className="secondary" onClick={() => setPrinting(true)}>
+            Карта заказа / печать
+          </button>
           {!closed && (
             <button className="subtle" onClick={() => setEditing(true)}>
               Информация о заказе
@@ -304,6 +427,42 @@ export function OperatorWorkspace({
           </button>
         </div>
       </div>
+      {printing && (
+        <ProductionSheet
+          title={`Заказ № ${order.code}`}
+          subtitle={order.name}
+          order={order}
+          batches={own}
+          inks={props.inks}
+          onClose={() => setPrinting(false)}
+        />
+      )}
+      {(order.production?.material ||
+        order.production?.anilox ||
+        order.production?.uv ||
+        order.production?.speed) && (
+        <div className="production-context">
+          {Object.entries(order.production)
+            .filter(([, value]) => value)
+            .map(([key, value]) => (
+              <span key={key}>
+                <small>
+                  {
+                    (
+                      {
+                        material: "Материал",
+                        anilox: "Анилокс",
+                        uv: "УФ",
+                        speed: "Скорость",
+                      } as Record<string, string>
+                    )[key]
+                  }
+                </small>
+                {value}
+              </span>
+            ))}
+        </div>
+      )}
       {order.repeatOf && (
         <p className="hint">
           <a href={`#orders/${order.repeatOf}`}>История исходного заказа</a> ·
@@ -338,13 +497,7 @@ export function OperatorWorkspace({
                     <i style={{ background: catalog?.hex || "#33404b" }} />
                     <span>
                       {c.pantone}
-                      <small>
-                        {c.acceptedSampleId
-                          ? "Подтверждён"
-                          : c.currentReferenceId
-                            ? "Эталон есть"
-                            : "Нужен эталон"}
-                      </small>
+                      <small>{colorWorkflow(c, own).label}</small>
                     </span>
                   </button>
                 );
@@ -879,11 +1032,25 @@ export function OperatorWorkspace({
                               undefined
                             }
                           />
+                          <TrialTrend
+                            samples={active?.samples || []}
+                            target={reference.measurement}
+                            current={draft.measurement}
+                            tolerance={
+                              order.tolerance ||
+                              props.settings.tolerance ||
+                              undefined
+                            }
+                          />
                           <Field label="Что получилось / заметка">
                             <textarea
                               aria-label="Что получилось / заметка"
-                              value={draft.comment || ""}
-                              disabled={!!draft.savedId}
+                              value={
+                                draft.measurement
+                                  ? draft.comment || ""
+                                  : latest?.comment || ""
+                              }
+                              disabled={!draft.measurement || !!draft.savedId}
                               onChange={(e) =>
                                 patch({ comment: e.target.value })
                               }
@@ -897,7 +1064,7 @@ export function OperatorWorkspace({
                                 className="secondary"
                                 disabled={
                                   (!draft.measurement && !latest) ||
-                                  !!draft.savedId ||
+                                  displayedSaved ||
                                   !!(!draft.measurement && pending.length)
                                 }
                                 onClick={() =>
@@ -909,7 +1076,7 @@ export function OperatorWorkspace({
                                   })
                                 }
                               >
-                                {draft.savedId
+                                {displayedSaved
                                   ? "Выкатка сохранена"
                                   : "Сохранить выкатку"}
                               </button>
@@ -956,11 +1123,28 @@ export function OperatorWorkspace({
                                 Цвет устроил — подтвердить
                               </button>
                             </div>
-                            {color.acceptedSampleId && (
+                            {displayedAccepted && (
                               <p className="accepted-label">
                                 ✓ Результат {color.pantone} подтверждён
                               </p>
                             )}
+                            {displayedAccepted &&
+                              order.colors.some(
+                                (c) => c.id !== color.id && !c.acceptedSampleId,
+                              ) && (
+                                <button
+                                  onClick={() => {
+                                    const next = order.colors.find(
+                                      (c) =>
+                                        c.id !== color.id &&
+                                        !c.acceptedSampleId,
+                                    );
+                                    if (next) select(next);
+                                  }}
+                                >
+                                  Перейти к следующему цвету →
+                                </button>
+                              )}
                             {latest &&
                               active?.compositionKnown !== false &&
                               latest.components.length > 0 && (
@@ -1010,17 +1194,23 @@ export function OperatorWorkspace({
                       {order.colors.length}
                     </h3>
                     <p className="hint">
-                      Подтвердите каждый цвет, затем завершите заказ.
+                      {hasUnsaved
+                        ? "Есть несохранённая выкатка. Сохраните и подтвердите её перед завершением."
+                        : "Подтвердите каждый цвет, затем завершите заказ."}
                     </p>
                   </div>
                   <button
                     disabled={
-                      busy || order.colors.some((c) => !c.acceptedSampleId)
+                      busy ||
+                      hasUnsaved ||
+                      order.colors.some((c) => !c.acceptedSampleId)
                     }
                     onClick={() =>
                       void perform(async () => {
                         await finishOrder(order.id);
-                        props.onSuccess("Заказ завершён и перенесён в историю");
+                        props.onSuccess(
+                          "Заказ завершён. Подтверждённые составы сохранены в рецептурах.",
+                        );
                         location.hash = "orders";
                       })
                     }
@@ -1082,6 +1272,24 @@ export function OperatorWorkspace({
             <details className="card">
               <summary>Веер, состав и предыдущие заказы</summary>
               <ColorKnowledge {...props} pantone={color.pantone} />
+            </details>
+            <details className="card">
+              <summary>Что помогало в предыдущих подборах</summary>
+              <RecipeStarter
+                color={color}
+                recipes={props.recipes}
+                batches={props.batches}
+                inks={props.inks}
+                onError={props.onError}
+                onUse={(components) => {
+                  setInitial(components);
+                  setStage(1);
+                  setStep("rollout");
+                  props.onSuccess(
+                    "Состав подготовлен. Проверьте массы и нажмите «Сохранить исходный состав».",
+                  );
+                }}
+              />
             </details>
           </aside>
         </div>

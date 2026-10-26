@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   id,
   now,
@@ -41,13 +41,31 @@ export function Pantones({
     [editing, setEditing] = useState(false),
     [busy, setBusy] = useState(false);
   const [limit, setLimit] = useState(96),
-    [edition, setEdition] = useState("all");
+    [edition, setEdition] = useState("all"),
+    [content, setContent] = useState("all");
+  const detail = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (selectedId) detail.current?.scrollIntoView({ block: "start" });
+  }, [selectedId]);
+  const recipeCounts = new Map<string, Set<string>>();
+  recipes.forEach((r) => {
+    const key = pantoneKey(r.pantone);
+    const families = recipeCounts.get(key) || new Set<string>();
+    families.add(r.familyId);
+    recipeCounts.set(key, families);
+  });
+  const searchKey = search.replace(/\s+/g, "").toLowerCase();
   const filtered = pantones.filter(
     (p) =>
       (edition !== "2026" || p.catalog?.edition === "2026") &&
+      (content === "all" ||
+        (content === "recipes"
+          ? recipeCounts.has(p.id)
+          : !!p.currentReferenceId)) &&
       `${p.pantone} ${p.name} ${p.notes}`
+        .replace(/\s+/g, "")
         .toLowerCase()
-        .includes(search.toLowerCase()),
+        .includes(searchKey),
   );
   const selected = pantones.find((p) => p.id === selectedId);
   return (
@@ -64,6 +82,22 @@ export function Pantones({
         </div>
         <button onClick={() => setCreating(!creating)}>Добавить Pantone</button>
       </div>
+      <Field label="Показывать в веере">
+        <select
+          aria-label="Показывать в веере"
+          value={content}
+          onChange={(e) => {
+            setContent(e.target.value);
+            setLimit(96);
+          }}
+        >
+          <option value="all">Все цвета</option>
+          <option value="recipes">
+            Только с рецептурой · {recipeCounts.size}
+          </option>
+          <option value="references">Только с моим эталоном</option>
+        </select>
+      </Field>
       {creating && (
         <section className="card">
           <Field label="Номер Pantone">
@@ -151,7 +185,7 @@ export function Pantones({
         не заменяют физический веер и измерения прибора.
       </p>
       {selected && (
-        <section className="card fan-selected">
+        <section ref={detail} className="card fan-selected">
           <button className="subtle" onClick={() => setSelectedId("")}>
             Закрыть карточку
           </button>
@@ -192,7 +226,11 @@ export function Pantones({
               </span>
               <h3>{p.pantone}</h3>
               <p>{p.name || "Цвет из справочника"}</p>
-              <small>Эталонов: {p.references.length} · Просмотреть</small>
+              <small>
+                Рецептур: {recipeCounts.get(p.id)?.size || 0} · эталонов:{" "}
+                {p.references.length}
+              </small>
+              <small>Просмотреть состав →</small>
             </button>
           ))}
       </div>

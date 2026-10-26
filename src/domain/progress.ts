@@ -2,10 +2,19 @@ import { difference, deltaE2000 } from "../color/color";
 import type { Measurement, Sample } from "./types";
 export function comparable(a: Measurement, b: Measurement) {
   return (
-    JSON.stringify(a.conditions) === JSON.stringify(b.conditions) &&
+    sameConditions(a.conditions, b.conditions) &&
     a.source.startsWith("PHOTO") === b.source.startsWith("PHOTO") &&
     a.profileId === b.profileId &&
     a.calibrationId === b.calibrationId
+  );
+}
+export function sameConditions(
+  a: Measurement["conditions"],
+  b: Measurement["conditions"],
+) {
+  return (
+    (Object.keys(a) as (keyof typeof a)[]).every((key) => a[key] === b[key]) &&
+    (Object.keys(b) as (keyof typeof b)[]).every((key) => a[key] === b[key])
   );
 }
 export function progress(

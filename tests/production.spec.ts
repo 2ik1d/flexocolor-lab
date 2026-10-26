@@ -176,7 +176,7 @@ test("офлайн после кэширования и сохранённая �
     .getByRole("button", { name: "Сохранить рецептуру", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "ТЕСТ офлайн" }),
+    page.locator(".recipe-library-card").filter({ hasText: "ТЕСТ офлайн" }),
   ).toBeVisible();
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
@@ -186,7 +186,7 @@ test("офлайн после кэширования и сохранённая �
   await context.setOffline(true);
   await page.reload();
   await expect(
-    page.getByRole("heading", { name: "ТЕСТ офлайн" }),
+    page.locator(".recipe-library-card").filter({ hasText: "ТЕСТ офлайн" }),
   ).toBeVisible();
   await expect(
     page.getByText("Офлайн · данные сохраняются на устройстве"),
@@ -208,15 +208,19 @@ test("версии и масштаб рецептуры", async ({ page }) => {
     .getByRole("button", { name: "Сохранить рецептуру", exact: true })
     .click();
   await page
-    .getByRole("button")
-    .filter({ has: page.getByRole("heading", { name: "ТЕСТ рецепт" }) })
+    .getByRole("button", {
+      name: "Редактировать / создать версию",
+      exact: true,
+    })
     .click();
   await page.getByLabel("Масса 1", { exact: true }).fill("800");
   await page
     .getByRole("button", { name: "Сохранить новой версией", exact: true })
     .click();
-  await expect(page.getByRole("heading", { name: "ТЕСТ рецепт" })).toHaveCount(
-    2,
-  );
+  await expect(page.locator(".recipe-library-card")).toHaveCount(1);
+  await page
+    .getByRole("checkbox", { name: "Показывать все версии", exact: true })
+    .check();
+  await expect(page.locator(".recipe-library-card")).toHaveCount(2);
   await expect(page.getByText("v2", { exact: true })).toBeVisible();
 });

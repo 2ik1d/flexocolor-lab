@@ -83,7 +83,7 @@ it("сохраняет партию, добавки, пробы и восста�
   expect(await d.batches.count()).toBe(1);
   await d.delete();
 });
-it("мигрирует схему v1 → v5 без потери истории", async () => {
+it("мигрирует схему v1 → v6 без потери истории", async () => {
   const name = id(),
     old = new Dexie(name);
   old.version(1).stores({
@@ -103,7 +103,8 @@ it("мигрирует схему v1 → v5 без потери истории",
   const b = await current.batches.get("legacy");
   expect(b?.status).toBe("ACTIVE");
   expect(b?.samples).toEqual([]);
-  expect(current.verno).toBe(5);
+  expect(current.verno).toBe(6);
+  expect(await current.drafts.count()).toBe(0);
   expect((await current.orders.toArray())[0].name).toBe("Legacy");
   expect(b?.orderId).toBe("legacy-order-legacy");
   await current.delete();

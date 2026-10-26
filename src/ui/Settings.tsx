@@ -218,7 +218,9 @@ export function Settings({
               заменяет измерения прибором. Непроверенная модель не выдаёт
               производственные добавки.
             </p>
-            <small>FlexoColor Lab 1.0 · схема данных 4</small>
+            <small>
+              FlexoColor Lab 1.1 · локальная база v6 · резервные копии v5
+            </small>
           </section>
         </aside>
       </div>
