@@ -32,6 +32,7 @@ import { Batches, Inks, Recipes } from "./ui/Records";
 import { Calibration } from "./ui/Calibration";
 import { Settings } from "./ui/Settings";
 import { Pantones } from "./ui/Pantones";
+import { withFan } from "./domain/fan";
 type Page =
   | "orders"
   | "pantones"
@@ -43,7 +44,7 @@ type Page =
   | "settings";
 const nav = [
   { id: "orders", name: "Заказы", icon: FolderOpen },
-  { id: "pantones", name: "База Pantone", icon: BookOpen },
+  { id: "pantones", name: "Веер Pantone", icon: BookOpen },
   { id: "quick", name: "Быстрая приладка", icon: ScanLine },
   { id: "recipes", name: "Рецептуры", icon: BookOpen },
   { id: "batches", name: "История замесов", icon: History },
@@ -108,7 +109,7 @@ export default function App() {
         setRecipes(r);
         setBatches(b);
         setOrders(o);
-        setPantones(catalog);
+        setPantones(withFan(catalog));
         setProfiles(p);
         setExperiments(e);
         if (s) setSettings(s);
@@ -231,6 +232,9 @@ export default function App() {
               <Pantones
                 pantones={pantones}
                 settings={settings}
+                recipes={recipes}
+                batches={batches}
+                inks={inks}
                 onChange={onChange}
                 onError={onError}
               />

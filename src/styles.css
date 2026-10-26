@@ -1606,3 +1606,437 @@ li {
     min-width: 0;
   }
 }
+/* Operator flow */
+.operator-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 285px;
+  gap: 24px;
+  align-items: start;
+}
+.operator-main {
+  min-width: 0;
+}
+.operator-heading h1 {
+  font-size: 30px;
+}
+.operator-heading h1 span {
+  display: block;
+  color: #98a6af;
+  font-size: 16px;
+  font-weight: 400;
+  margin-top: 8px;
+}
+.operator-controls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 18px;
+}
+.operator-controls > .card {
+  margin: 0;
+}
+.operator-colors {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 0 0 18px;
+  margin-bottom: 16px;
+}
+.operator-colors button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #192127;
+  border: 1px solid var(--border);
+  color: #c6d0d6;
+  min-width: 140px;
+  text-align: left;
+  padding: 12px;
+}
+.operator-colors button.active {
+  border-color: var(--accent);
+  background: #b8ec7010;
+}
+.operator-colors i {
+  width: 30px;
+  height: 36px;
+  border-radius: 5px;
+  border: 1px solid #fff2;
+  flex-shrink: 0;
+}
+.operator-colors small {
+  display: block;
+  font-size: 10px;
+  color: #8e9ca6;
+  font-weight: 400;
+  margin-top: 3px;
+}
+.operator-stage-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.operator-stage-tabs button {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  text-align: left;
+  background: #171f25;
+  border: 1px solid var(--border);
+  color: #a2afb9;
+  padding: 17px;
+}
+.operator-stage-tabs button.active {
+  background: #25351e;
+  border-color: #789b54;
+  color: #e4f4d4;
+}
+.operator-stage-tabs b {
+  font-size: 23px;
+  font-weight: 400;
+  opacity: 0.65;
+}
+.operator-stage-tabs small {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  margin-top: 5px;
+  color: #9caaa8;
+}
+.operator-step-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 22px;
+  gap: 8px;
+}
+.operator-step-tabs button {
+  background: transparent;
+  color: #8799a8;
+  border-radius: 0;
+  padding: 12px 18px;
+  border-bottom: 2px solid transparent;
+}
+.operator-step-tabs button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.operator-history {
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.operator-history .card {
+  padding: 18px;
+}
+.operator-history h3 {
+  font-size: 15px;
+}
+.operator-history p {
+  font-size: 12px;
+}
+.history-event {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 13px 0;
+  color: #c0cbd3;
+  font-size: 12px;
+  font-weight: 400;
+}
+.history-event small {
+  display: block;
+  color: #7f939f;
+  font-size: 10px;
+  margin-bottom: 7px;
+}
+.history-event span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.order-finish {
+  margin-top: 22px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: center;
+}
+.order-finish h3 {
+  font-size: 14px;
+  margin: 0;
+}
+.order-finish .hint {
+  margin: 7px 0 0;
+}
+.order-finish button {
+  font-size: 12px;
+}
+.accepted-label {
+  color: var(--accent);
+}
+.tolerance-failed {
+  color: #efad8a;
+}
+.delta-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  margin: 16px 0;
+}
+.delta-metrics > div {
+  background: #121a20;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+}
+.delta-metrics span {
+  display: block;
+  font-size: 10px;
+  color: #8ea1b1;
+}
+.delta-metrics strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 500;
+}
+.delta-metrics.compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.analysis-context {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.analysis-context span {
+  color: #8ea0ad;
+  font-size: 11px;
+}
+.addition-color-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  margin: 18px 0;
+}
+.operator-controls .reference-editor > .card {
+  margin-bottom: 16px;
+}
+.operator-controls .previous-rollout {
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+.order-search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 680px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px 16px;
+  margin-bottom: 20px;
+  color: #8298a6;
+}
+.order-search input {
+  border: 0;
+  background: transparent;
+}
+.operator-order-list {
+  display: grid;
+  gap: 15px;
+}
+.operator-order-record {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  gap: 22px;
+}
+.operator-order-record h2 {
+  margin: 14px 0 3px;
+  font-size: 24px;
+}
+.order-color-editor {
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+  margin: 16px 0;
+}
+.color-editor-heading {
+  display: flex;
+  gap: 13px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.color-editor-heading > .field {
+  flex: 1;
+  min-width: 140px;
+}
+.color-index {
+  font-size: 22px;
+  color: #657985;
+  align-self: flex-start;
+  margin-top: 25px;
+}
+.order-form > .card-heading .field {
+  max-width: 150px;
+  margin: 0;
+}
+.knowledge-swatch {
+  min-height: 95px;
+  border-radius: 9px;
+  padding: 18px;
+  display: flex;
+  align-items: flex-end;
+  margin: 12px 0;
+}
+.knowledge-swatch strong {
+  background: #10151abf;
+  color: white;
+  border-radius: 5px;
+  padding: 4px 8px;
+}
+.color-knowledge {
+  min-width: 0;
+}
+.color-knowledge .composition {
+  font-size: 12px;
+}
+.color-knowledge > p {
+  font-size: 12px;
+}
+.fan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 15px;
+}
+.fan-grid .card {
+  padding: 12px;
+}
+.fan-chip {
+  height: 95px;
+  border-radius: 7px;
+  margin-bottom: 12px;
+}
+.fan-grid h3 {
+  font-size: 19px;
+  margin: 9px 0;
+}
+.fan-selected {
+  margin-bottom: 22px;
+}
+.fan-selected .knowledge-swatch {
+  min-height: 120px;
+}
+@media (max-width: 1150px) {
+  .operator-layout {
+    grid-template-columns: minmax(0, 1fr) 230px;
+    gap: 16px;
+  }
+  .operator-history .card {
+    padding: 14px;
+  }
+}
+@media (max-width: 1000px) {
+  .operator-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .operator-history {
+    position: static;
+    max-height: none;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .operator-history > details {
+    grid-column: 1/-1;
+  }
+  .operator-history .card {
+    margin: 0;
+  }
+  .operator-history .cycle-timeline {
+    max-height: 300px;
+    overflow: auto;
+  }
+}
+@media (max-width: 600px) {
+  .operator-stage-tabs {
+    gap: 7px;
+  }
+  .operator-stage-tabs button {
+    padding: 12px 9px;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .operator-stage-tabs b {
+    font-size: 18px;
+  }
+  .operator-stage-tabs small {
+    font-size: 9px;
+  }
+  .operator-step-tabs {
+    gap: 0;
+  }
+  .operator-step-tabs button {
+    flex: 1;
+    font-size: 11px;
+    padding: 10px 6px;
+  }
+  .operator-history {
+    grid-template-columns: 1fr;
+  }
+  .order-finish,
+  .operator-order-record {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .color-editor-heading > .field {
+    flex-basis: calc(100% - 40px);
+  }
+  .color-editor-heading > button {
+    width: 100%;
+  }
+  .delta-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .operator-heading {
+    flex-direction: column;
+    align-items: start;
+  }
+  .operator-heading > .actions {
+    margin: 0;
+  }
+  .fan-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .operator-order-record .actions {
+    margin: 0;
+  }
+  .operator-controls .component-row {
+    grid-template-columns: minmax(80px, 1fr) 65px 10px 28px;
+  }
+}
+@media (min-width: 1250px) {
+  .operator-controls:has(> .analysis-context) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+  .operator-controls:has(> .analysis-context)
+    > :not(.comparison-report):not(.trend-card) {
+    grid-column: 1/-1;
+  }
+  .operator-controls:has(> .analysis-context) .delta-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .operator-controls:has(> .analysis-context) > .comparison-report,
+  .operator-controls:has(> .analysis-context) > .trend-card {
+    height: 100%;
+  }
+}

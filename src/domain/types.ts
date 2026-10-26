@@ -188,10 +188,20 @@ export const orderColorSchema = z.object({
   name: z.string(),
   references: z.array(orderReferenceSchema),
   currentReferenceId: z.string(),
+  startingComponents: z.array(componentSchema).optional(),
+  acceptedSampleId: z.string().optional(),
 });
 export const pantoneSchema = orderColorSchema.extend({
   createdAt: z.string(),
   notes: z.string(),
+  catalog: z
+    .object({
+      hex: z.string().regex(/^#[0-9a-f]{6}$/i),
+      lab: labSchema,
+      edition: z.string(),
+      source: z.string(),
+    })
+    .optional(),
 });
 export const orderEventSchema = z.object({
   id: z.string().min(1),
@@ -215,6 +225,7 @@ export const orderSchema = z.object({
   closedAt: z.string().optional(),
   repeatOf: z.string().optional(),
   events: z.array(orderEventSchema).optional(),
+  tolerance: z.number().positive().optional(),
 });
 export const backupSchema = z.object({
   format: z.literal("FlexoColorLab"),

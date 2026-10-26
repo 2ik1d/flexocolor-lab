@@ -8,6 +8,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
+          fan: ["./src/data/coated.json"],
           libraries: [
             "react",
             "react-dom",

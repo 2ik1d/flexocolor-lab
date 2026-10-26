@@ -8,12 +8,14 @@ export function ProgressReport({
   previous,
   changes,
   inks,
+  tolerance,
 }: {
   target: Measurement;
   current: Measurement;
   previous?: Sample;
   changes: Batch["additions"];
   inks: Ink[];
+  tolerance?: number;
 }) {
   const result = progress(target, current, previous),
     photo = current.source.startsWith("PHOTO");
@@ -31,6 +33,33 @@ export function ProgressReport({
               <span>ΔE00 · меньше — ближе</span>
             </div>
             <p>Оттиск {result.toTarget.direction}.</p>
+            <div className="delta-metrics">
+              {[
+                ["ΔE76", result.toTarget.de76],
+                ["ΔL*", result.toTarget.l],
+                ["Δa*", result.toTarget.a],
+                ["Δb*", result.toTarget.b],
+                ["ΔC*", result.toTarget.c],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <span>{label}</span>
+                  <strong>{Number(value).toFixed(2)}</strong>
+                </div>
+              ))}
+            </div>
+            {tolerance !== undefined && (
+              <p
+                className={
+                  result.toTarget.de00 <= tolerance
+                    ? "accepted-label"
+                    : "tolerance-failed"
+                }
+              >
+                {result.toTarget.de00 <= tolerance ? "В пределах" : "Выше"}{" "}
+                допуска ΔE00 ≤ {tolerance.toFixed(2)}
+                {photo ? " · по фотооценке" : ""}
+              </p>
+            )}
           </>
         ) : (
           <Notice>Условия отличаются. Сравнение с эталоном недоступно.</Notice>
@@ -60,6 +89,19 @@ export function ProgressReport({
               {result.fromPrevious.de00.toFixed(2)}. Стало{" "}
               {result.fromPrevious.direction}.
             </p>
+            <div className="delta-metrics compact">
+              {[
+                ["ΔE76", result.fromPrevious.de76],
+                ["ΔL*", result.fromPrevious.l],
+                ["Δa*", result.fromPrevious.a],
+                ["Δb*", result.fromPrevious.b],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <span>{label}</span>
+                  <strong>{Number(value).toFixed(2)}</strong>
+                </div>
+              ))}
+            </div>
             {changes.length > 0 && (
               <p className="hint">
                 Между пробами внесено:{" "}

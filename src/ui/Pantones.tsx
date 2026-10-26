@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { id, now, type Pantone, type Settings } from "../domain/types";
+import {
+  id,
+  now,
+  type Pantone,
+  type Settings,
+  type Batch,
+  type Ink,
+  type Recipe,
+} from "../domain/types";
+import { ColorKnowledge } from "./ColorKnowledge";
 import { pantoneKey } from "../domain/pantones";
 import { savePantone } from "../storage/db";
 import { Field, date } from "./common";
@@ -10,11 +19,17 @@ import { SamplePhotos } from "./Records";
 export function Pantones({
   pantones,
   settings,
+  recipes,
+  batches,
+  inks,
   onChange,
   onError,
 }: {
   pantones: Pantone[];
   settings: Settings;
+  recipes: Recipe[];
+  batches: Batch[];
+  inks: Ink[];
   onChange: () => void;
   onError: (s: string) => void;
 }) {
@@ -25,16 +40,26 @@ export function Pantones({
     [selectedId, setSelectedId] = useState(""),
     [editing, setEditing] = useState(false),
     [busy, setBusy] = useState(false);
+  const [limit, setLimit] = useState(96),
+    [edition, setEdition] = useState("all");
+  const filtered = pantones.filter(
+    (p) =>
+      (edition !== "2026" || p.catalog?.edition === "2026") &&
+      `${p.pantone} ${p.name} ${p.notes}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+  );
   const selected = pantones.find((p) => p.id === selectedId);
   return (
     <>
       <div className="page-heading">
         <div>
           <div className="eyebrow">ЭТАЛОНЫ И ПОВТОРЫ</div>
-          <h1>База Pantone</h1>
+          <h1>Веер Pantone · Coated</h1>
           <p>
-            Цвета из заказов появляются здесь автоматически. Эталоны можно
-            использовать снова.
+            {pantones.length.toLocaleString("ru")} готовых экранных образцов · в
+            том числе 224 новых цвета 2026 года. Ваши эталоны и составы
+            сохраняются рядом.
           </p>
         </div>
         <button onClick={() => setCreating(!creating)}>Добавить Pantone</button>
@@ -96,18 +121,55 @@ export function Pantones({
         aria-label="Найти Pantone"
         placeholder="Номер, название или примечание…"
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => {
+          setSearch(e.target.value);
+          setLimit(96);
+        }}
       />
-      <div className="record-grid">
-        {pantones
-          .filter((p) =>
-            `${p.pantone} ${p.name} ${p.notes}`
-              .toLowerCase()
-              .includes(search.toLowerCase()),
-          )
+      <div className="segmented">
+        <button
+          className={edition === "all" ? "active" : ""}
+          onClick={() => {
+            setEdition("all");
+            setLimit(96);
+          }}
+        >
+          Весь веер
+        </button>
+        <button
+          className={edition === "2026" ? "active" : ""}
+          onClick={() => {
+            setEdition("2026");
+            setLimit(96);
+          }}
+        >
+          Новинки 2026 · 224
+        </button>
+      </div>
+      <p className="hint">
+        Найдено: {filtered.length}. Экранные образцы из опубликованных наборов;
+        не заменяют физический веер и измерения прибора.
+      </p>
+      {selected && (
+        <section className="card fan-selected">
+          <button className="subtle" onClick={() => setSelectedId("")}>
+            Закрыть карточку
+          </button>
+          <ColorKnowledge
+            pantone={selected.pantone}
+            pantones={pantones}
+            recipes={recipes}
+            batches={batches}
+            inks={inks}
+          />
+        </section>
+      )}
+      <div className="fan-grid">
+        {filtered
           .sort((a, b) =>
             a.pantone.localeCompare(b.pantone, "ru", { numeric: true }),
           )
+          .slice(0, limit)
           .map((p) => (
             <button
               key={p.id}
@@ -117,8 +179,16 @@ export function Pantones({
                 setEditing(false);
               }}
             >
+              <div
+                className="fan-chip"
+                style={{ background: p.catalog?.hex || "#33404b" }}
+              />
               <span className="tag">
-                {p.currentReferenceId ? "Эталон сохранён" : "Нужен эталон"}
+                {p.currentReferenceId
+                  ? "Ваш эталон"
+                  : p.catalog?.edition === "2026"
+                    ? "Новинка 2026"
+                    : "Coated"}
               </span>
               <h3>{p.pantone}</h3>
               <p>{p.name || "Цвет из справочника"}</p>
@@ -126,6 +196,11 @@ export function Pantones({
             </button>
           ))}
       </div>
+      {filtered.length > limit && (
+        <button className="secondary wide" onClick={() => setLimit(limit + 96)}>
+          Показать ещё 96 цветов
+        </button>
+      )}
       {!pantones.length && <p>Добавьте цвет здесь или при создании заказа.</p>}
       {selected && (
         <section
