@@ -1,0 +1,13 @@
+Обнова гитхаба
+C:\FlexoColor Lab\FlexoColor Lab
+
+Выполни по очереди:
+
+1. Добавляем изменённые файлы:
+git add .
+
+2. Сохраняем изменения:
+git commit -m "Update FlexoColor Lab"
+
+3. Отправляем на GitHub:
+git push
