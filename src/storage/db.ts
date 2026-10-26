@@ -1,4 +1,5 @@
 import Dexie, { type Table } from "dexie";
+import { z } from "zod";
 import {
   backupSchema,
   id,
@@ -13,7 +14,11 @@ import {
   type Settings,
   type Sample,
   type Measurement,
+  type Order,
+  type OrderReference,
+  orderReferenceSchema,
 } from "../domain/types";
+import { migrateLegacyBatches, makeRun, type NewRun } from "../domain/orders";
 import { composition, normalize, total } from "../domain/mixture";
 import { deltaE2000 } from "../color/color";
 export class LabDB extends Dexie {
@@ -24,6 +29,7 @@ export class LabDB extends Dexie {
   experiments!: Table<Experiment, string>;
   photos!: Table<Photo, string>;
   settings!: Table<Settings, string>;
+  orders!: Table<Order, string>;
   constructor(name = "FlexoColorLab") {
     super(name);
     this.version(1).stores({
@@ -50,6 +56,17 @@ export class LabDB extends Dexie {
             b.samples ??= [];
             b.additions ??= [];
           });
+      });
+    this.version(3)
+      .stores({
+        orders: "id,name,code",
+        batches: "id,createdAt,status,orderId",
+      })
+      .upgrade(async (tx) => {
+        const batches = await tx.table<Batch>("batches").toArray();
+        const orders = migrateLegacyBatches(batches);
+        await tx.table("orders").bulkPut(orders);
+        await tx.table("batches").bulkPut(batches);
       });
   }
 }
@@ -98,21 +115,30 @@ export async function seed(database = db) {
   );
 }
 export async function exportData(database = db) {
-  const [inks, recipes, batches, profiles, experiments, photos, settings] =
-    await database.transaction("r", database.tables, () =>
-      Promise.all([
-        database.inks.toArray(),
-        database.recipes.toArray(),
-        database.batches.toArray(),
-        database.profiles.toArray(),
-        database.experiments.toArray(),
-        database.photos.toArray(),
-        database.settings.toArray(),
-      ]),
-    );
+  const [
+    inks,
+    recipes,
+    batches,
+    profiles,
+    experiments,
+    photos,
+    settings,
+    orders,
+  ] = await database.transaction("r", database.tables, () =>
+    Promise.all([
+      database.inks.toArray(),
+      database.recipes.toArray(),
+      database.batches.toArray(),
+      database.profiles.toArray(),
+      database.experiments.toArray(),
+      database.photos.toArray(),
+      database.settings.toArray(),
+      database.orders.toArray(),
+    ]),
+  );
   return backupSchema.parse({
     format: "FlexoColorLab",
-    version: 2,
+    version: 3,
     exportedAt: now(),
     inks,
     recipes,
@@ -121,10 +147,27 @@ export async function exportData(database = db) {
     experiments,
     photos,
     settings,
+    orders,
   });
 }
 export function validateBackup(raw: unknown) {
-  const b = backupSchema.parse(raw);
+  let input = raw;
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    "version" in raw &&
+    raw.version === 2
+  ) {
+    // Parse every legacy field before deriving orders; never mutate the source.
+    const legacy = backupSchema
+      .omit({ orders: true })
+      .extend({ version: z.literal(2) })
+      .parse(raw);
+    const batches = structuredClone(legacy.batches);
+    const orders = migrateLegacyBatches(batches);
+    input = { ...legacy, version: 3, batches, orders };
+  }
+  const b = backupSchema.parse(input);
   const unique = (arr: { id: string }[]) => {
     if (new Set(arr.map((r) => r.id)).size !== arr.length)
       throw Error("Повторяющиеся ID в резервной копии");
@@ -137,11 +180,13 @@ export function validateBackup(raw: unknown) {
     b.experiments,
     b.photos,
     b.settings,
+    b.orders,
   ].forEach(unique);
   const inks = new Set(b.inks.map((i) => i.id)),
     photos = new Set(b.photos.map((p) => p.id)),
     profiles = new Set(b.profiles.map((p) => p.id)),
-    batches = new Set(b.batches.map((p) => p.id));
+    batches = new Set(b.batches.map((p) => p.id)),
+    orders = new Map(b.orders.map((o) => [o.id, o]));
   if (b.settings.length !== 1)
     throw Error("В копии должна быть одна запись настроек");
   if (b.settings[0].profileId && !profiles.has(b.settings[0].profileId))
@@ -173,6 +218,15 @@ export function validateBackup(raw: unknown) {
     versions.add(key);
   });
   b.batches.forEach((batch) => {
+    if (batch.orderId) {
+      const order = orders.get(batch.orderId);
+      if (!order) throw Error("Не найден заказ запуска");
+      if (
+        batch.referenceId &&
+        !order.references.some((r) => r.id === batch.referenceId)
+      )
+        throw Error("Не найден эталон запуска");
+    }
     unique(batch.samples);
     unique(batch.additions);
     check(batch.initial);
@@ -187,6 +241,19 @@ export function validateBackup(raw: unknown) {
         s.additionIds?.some((id) => !batch.additions.some((a) => a.id === id))
       )
         throw Error("Неизвестное событие добавки");
+    });
+  });
+  b.orders.forEach((o) => {
+    unique(o.references);
+    if (
+      o.currentReferenceId &&
+      !o.references.some((r) => r.id === o.currentReferenceId)
+    )
+      throw Error("Не найден текущий эталон заказа");
+    o.references.forEach((r) => {
+      checkMeasurement(r.measurement);
+      if (r.photoIds.some((p) => !photos.has(p)))
+        throw Error("Отсутствует фото эталона заказа");
     });
   });
   b.profiles.forEach((p) => p.controls.forEach(checkMeasurement));
@@ -211,6 +278,7 @@ export async function importData(raw: unknown, database = db) {
     await database.experiments.bulkPut(b.experiments);
     await database.photos.bulkPut(b.photos);
     await database.settings.bulkPut(b.settings);
+    await database.orders.bulkPut(b.orders);
   });
 }
 export function quality(before: Sample["current"], after: Sample["current"]) {
@@ -250,6 +318,8 @@ export async function saveSample(
       const b = await database.batches.get(batchId);
       if (!b) throw Error("Партия не найдена");
       if (b.status !== "ACTIVE") throw Error("Партия завершена");
+      if (b.orderId && sample.referenceId !== b.referenceId)
+        throw Error("Эталон пробы не соответствует запуску заказа");
       if (
         JSON.stringify(composition(b)) !==
         JSON.stringify(normalize(sample.components))
@@ -312,3 +382,44 @@ export const repeatability = (controls: Sample["current"][]) =>
       controls.slice(i + 1).map((b) => deltaE2000(a.lab, b.lab)),
     ),
   );
+export async function saveOrderReference(
+  orderId: string,
+  reference: OrderReference,
+  photos: Photo[],
+  database = db,
+) {
+  const r = orderReferenceSchema.parse(reference);
+  await database.transaction(
+    "rw",
+    database.orders,
+    database.photos,
+    async () => {
+      const order = await database.orders.get(orderId);
+      if (!order) throw Error("Заказ не найден");
+      if (order.references.some((old) => old.id === r.id))
+        throw Error("Эта версия эталона уже сохранена");
+      await database.photos.bulkPut(photos);
+      if ((await database.photos.bulkGet(r.photoIds)).some((p) => !p))
+        throw Error("Фото эталона не найдено");
+      await database.orders.put({
+        ...order,
+        references: [...order.references, r],
+        currentReferenceId: r.id,
+      });
+    },
+  );
+}
+export async function createRun(orderId: string, input: NewRun, database = db) {
+  return database.transaction(
+    "rw",
+    database.orders,
+    database.batches,
+    async () => {
+      const order = await database.orders.get(orderId);
+      if (!order) throw Error("Заказ не найден");
+      const run = makeRun(order, input);
+      await database.batches.add(run);
+      return run;
+    },
+  );
+}

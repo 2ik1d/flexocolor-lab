@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ScanLine,
+  FolderOpen,
   BookOpen,
   History,
   PaintBucket,
@@ -16,19 +17,29 @@ import { db, seed } from "./storage/db";
 import {
   defaultConditions,
   type Ink,
+  type Order,
   type Recipe,
   type Batch,
   type Profile,
   type Experiment,
   type Settings as SettingsType,
 } from "./domain/types";
+import { Orders } from "./ui/Orders";
+import { useHash } from "./ui/routing";
 import { Compare } from "./ui/Compare";
 import { Batches, Inks, Recipes } from "./ui/Records";
 import { Calibration } from "./ui/Calibration";
 import { Settings } from "./ui/Settings";
 type Page =
-  "quick" | "recipes" | "batches" | "inks" | "calibration" | "settings";
+  | "orders"
+  | "quick"
+  | "recipes"
+  | "batches"
+  | "inks"
+  | "calibration"
+  | "settings";
 const nav = [
+  { id: "orders", name: "Заказы", icon: FolderOpen },
   { id: "quick", name: "Быстрая приладка", icon: ScanLine },
   { id: "recipes", name: "Рецептуры", icon: BookOpen },
   { id: "batches", name: "История замесов", icon: History },
@@ -36,13 +47,13 @@ const nav = [
   { id: "calibration", name: "Калибровка", icon: SlidersHorizontal },
   { id: "settings", name: "Настройки", icon: SettingsIcon },
 ] as const;
-const getPage = (): Page =>
-  nav.some((n) => n.id === location.hash.slice(1))
-    ? (location.hash.slice(1) as Page)
-    : "quick";
+const getPage = (hash: string): Page =>
+  nav.some((n) => n.id === hash.slice(1).split("/")[0])
+    ? (hash.slice(1).split("/")[0] as Page)
+    : "orders";
 export default function App() {
-  const [page, setPage] = useState(getPage),
-    [menu, setMenu] = useState(false),
+  const page = getPage(useHash());
+  const [menu, setMenu] = useState(false),
     [online, setOnline] = useState(navigator.onLine),
     [ready, setReady] = useState(false),
     [fatal, setFatal] = useState(""),
@@ -51,6 +62,7 @@ export default function App() {
     [inks, setInks] = useState<Ink[]>([]),
     [recipes, setRecipes] = useState<Recipe[]>([]),
     [batches, setBatches] = useState<Batch[]>([]),
+    [orders, setOrders] = useState<Order[]>([]),
     [profiles, setProfiles] = useState<Profile[]>([]),
     [experiments, setExperiments] = useState<Experiment[]>([]),
     [settings, setSettings] = useState<SettingsType>({
@@ -61,7 +73,6 @@ export default function App() {
     });
   useEffect(() => {
     const hash = () => {
-      setPage(getPage());
       setMenu(false);
     };
     const status = () => setOnline(navigator.onLine);
@@ -78,17 +89,19 @@ export default function App() {
     void (async () => {
       try {
         await seed();
-        const [i, r, b, p, e, s] = await Promise.all([
+        const [i, r, b, p, e, s, o] = await Promise.all([
           db.inks.toArray(),
           db.recipes.toArray(),
           db.batches.orderBy("createdAt").reverse().toArray(),
           db.profiles.toArray(),
           db.experiments.toArray(),
           db.settings.get("settings"),
+          db.orders.toArray(),
         ]);
         setInks(i);
         setRecipes(r);
         setBatches(b);
+        setOrders(o);
         setProfiles(p);
         setExperiments(e);
         if (s) setSettings(s);
@@ -107,7 +120,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="mobile-header">
-        <a href="#quick" className="brand">
+        <a href="#orders" className="brand">
           <Brand />
           FlexoColor <b>Lab</b>
         </a>
@@ -120,7 +133,7 @@ export default function App() {
         </button>
       </header>
       <aside className={`sidebar ${menu ? "open" : ""}`}>
-        <a className="brand" href="#quick">
+        <a className="brand" href="#orders">
           <Brand />
           <span>
             FlexoColor <b>Lab</b>
@@ -129,18 +142,25 @@ export default function App() {
         </a>
         <div className="nav-label">ЛАБОРАТОРИЯ</div>
         <nav>
-          {nav.map((n) => (
-            <a
-              href={`#${n.id}`}
-              key={n.id}
-              className={page === n.id ? "active" : ""}
-            >
-              <n.icon size={20} />
-              <span>{n.name}</span>
-              {page === n.id && <ChevronRight size={15} />}
-            </a>
-          ))}
+          {nav
+            .filter((n) => n.id !== "quick" && n.id !== "batches")
+            .map((n) => (
+              <a
+                href={`#${n.id}`}
+                key={n.id}
+                className={page === n.id ? "active" : ""}
+              >
+                <n.icon size={20} />
+                <span>{n.name}</span>
+                {page === n.id && <ChevronRight size={15} />}
+              </a>
+            ))}
         </nav>
+        <details className="tools-nav">
+          <summary>Дополнительные инструменты</summary>
+          <a href="#quick">Отдельное сравнение</a>
+          <a href="#batches">Архив замесов</a>
+        </details>
         <div className="sidebar-bottom">
           <div className="db-state">
             <Database size={18} />
@@ -188,6 +208,16 @@ export default function App() {
           <p>Открываем локальную лабораторию…</p>
         ) : (
           <div key={page}>
+            {page === "orders" && (
+              <Orders
+                {...shared}
+                orders={orders}
+                batches={batches}
+                settings={settings}
+                experiments={experiments}
+                onSuccess={onSuccess}
+              />
+            )}
             {page === "quick" && (
               <Compare
                 {...shared}

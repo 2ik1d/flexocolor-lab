@@ -4,7 +4,7 @@ const BASE = process.env.E2E_BASE_PATH || "/";
 test("мобильный цикл: смесь, фото, проба, добавка, повторная проба и восстановление", async ({
   page,
 }) => {
-  await page.goto(BASE);
+  await page.goto(BASE + "#quick");
   await expect(
     page.getByRole("heading", { name: "Быстрая приладка." }),
   ).toBeVisible();
@@ -149,7 +149,7 @@ test("повреждённая фотография и камера без до�
       },
     });
   });
-  await page.goto(BASE);
+  await page.goto(BASE + "#quick");
   await page
     .getByLabel("Загрузить Общий снимок", { exact: true })
     .setInputFiles({

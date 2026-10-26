@@ -7,6 +7,7 @@ import type {
   Measurement,
   Photo,
   Conditions,
+  OrderReference,
 } from "../domain/types";
 import { id, now, labSchema } from "../domain/types";
 import { composition, total } from "../domain/mixture";
@@ -71,6 +72,9 @@ export function Compare({
   onChange,
   onError,
   onSuccess,
+  fixedBatchId,
+  reference,
+  embedded = false,
 }: {
   batches: Batch[];
   inks: Ink[];
@@ -78,16 +82,25 @@ export function Compare({
   onChange: () => void;
   onError: (s: string) => void;
   onSuccess: (s: string) => void;
+  fixedBatchId?: string;
+  reference?: OrderReference;
+  embedded?: boolean;
 }) {
-  const [mode, setMode] = useState<"one" | "two" | "spectro">("one"),
-    [target, setTarget] = useState<Measurement>(),
+  const [mode, setMode] = useState<"one" | "two" | "spectro" | "saved">(
+      reference ? "saved" : "one",
+    ),
+    [target, setTarget] = useState<Measurement | undefined>(
+      reference?.measurement,
+    ),
     [current, setCurrent] = useState<Measurement>(),
     [photos, setPhotos] = useState<Photo[]>([]),
-    [batchId, setBatchId] = useState(""),
+    [batchId, setBatchId] = useState(fixedBatchId || ""),
     [comment, setComment] = useState(""),
     [saving, setSaving] = useState(false),
     [saved, setSaved] = useState(false),
-    [conditions, setConditions] = useState<Conditions>(settings.conditions);
+    [conditions, setConditions] = useState<Conditions>(
+      reference?.measurement.conditions || settings.conditions,
+    );
   function invalidate(which: "both" | "target" | "current") {
     if (which !== "current") setTarget(undefined);
     if (which !== "target") setCurrent(undefined);
@@ -116,7 +129,7 @@ export function Compare({
   }
   function changeMode(m: typeof mode) {
     setMode(m);
-    setTarget(undefined);
+    setTarget(m === "saved" ? reference?.measurement : undefined);
     setCurrent(undefined);
     setPhotos([]);
     setSaved(false);
@@ -135,7 +148,15 @@ export function Compare({
           createdAt: now(),
           target,
           current,
-          photoIds: activePhotos.map((p) => p.id),
+          photoIds: [
+            ...new Set([
+              ...activePhotos.map((p) => p.id),
+              ...(target.id === reference?.measurement.id
+                ? reference.photoIds
+                : []),
+            ]),
+          ],
+          referenceId: batch.referenceId,
           components: composition(batch),
           comment,
         },
@@ -143,7 +164,11 @@ export function Compare({
       );
       onChange();
       setSaved(true);
-      onSuccess("Проба и фотографии сохранены в партии");
+      onSuccess(
+        fixedBatchId
+          ? "Проба сохранена в этом запуске заказа"
+          : "Проба и фотографии сохранены в партии",
+      );
     } catch (e) {
       onError((e as Error).message);
     } finally {
@@ -165,33 +190,47 @@ export function Compare({
       : undefined;
   return (
     <>
-      <div className="intro">
-        <div>
-          <div className="eyebrow">РАБОЧЕЕ МЕСТО КОЛОРИСТА</div>
-          <h1>
-            Быстрая приладка<span className="accent">.</span>
-          </h1>
-          <p>Сравните эталон с оттиском. Сохраните пробу. Уточните смесь.</p>
-        </div>
-        <div className="local-chip">
-          <span />
-          Локальное хранение
-        </div>
-      </div>
-      <div className="steps">
-        <span className="active">
-          01 <b>Снимок</b>
-        </span>
-        <ArrowRight size={17} />
-        <span className={target ? "active" : ""}>
-          02 <b>Сравнение</b>
-        </span>
-        <ArrowRight size={17} />
-        <span className={saved ? "active" : ""}>
-          03 <b>Проба в истории</b>
-        </span>
-      </div>
+      {!embedded && (
+        <>
+          <div className="intro">
+            <div>
+              <div className="eyebrow">РАБОЧЕЕ МЕСТО КОЛОРИСТА</div>
+              <h1>
+                Быстрая приладка<span className="accent">.</span>
+              </h1>
+              <p>
+                Сравните эталон с оттиском. Сохраните пробу. Уточните смесь.
+              </p>
+            </div>
+            <div className="local-chip">
+              <span />
+              Локальное хранение
+            </div>
+          </div>
+          <div className="steps">
+            <span className="active">
+              01 <b>Снимок</b>
+            </span>
+            <ArrowRight size={17} />
+            <span className={target ? "active" : ""}>
+              02 <b>Сравнение</b>
+            </span>
+            <ArrowRight size={17} />
+            <span className={saved ? "active" : ""}>
+              03 <b>Проба в истории</b>
+            </span>
+          </div>
+        </>
+      )}
       <div className="segmented mode">
+        {reference && (
+          <button
+            className={mode === "saved" ? "active" : ""}
+            onClick={() => changeMode("saved")}
+          >
+            Эталон заказа
+          </button>
+        )}
         <button
           className={mode === "one" ? "active" : ""}
           onClick={() => changeMode("one")}
@@ -202,7 +241,7 @@ export function Compare({
           className={mode === "two" ? "active" : ""}
           onClick={() => changeMode("two")}
         >
-          Два снимка
+          {embedded ? "Два новых снимка" : "Два снимка"}
         </button>
         <button
           className={mode === "spectro" ? "active" : ""}
@@ -213,6 +252,47 @@ export function Compare({
       </div>
       <div className="work-grid compare-grid">
         <div className="stack">
+          {mode === "saved" && reference && (
+            <>
+              <section className="card">
+                <h3>Сохранённый эталон · {reference.name}</h3>
+                <p className="hint">
+                  {new Date(reference.createdAt).toLocaleDateString("ru-RU")} ·
+                  эталон этого запуска
+                </p>
+                <Notice>
+                  Снимите текущий оттиск. Сохранённое фото эталона при другом
+                  освещении может дать ошибку: для надёжного сравнения сделайте
+                  новый общий снимок с физическим эталоном.
+                </Notice>
+              </section>
+              {reference.measurement.source.startsWith("PHOTO") ? (
+                <PhotoEditor
+                  key="saved-current"
+                  label="Оттиск"
+                  onInvalidate={() => invalidate("current")}
+                  onAnalyze={(a) => receive(a, undefined, true)}
+                  onError={onError}
+                />
+              ) : (
+                <section className="card">
+                  <ConditionsEditor
+                    value={conditions}
+                    onChange={setConditions}
+                  />
+                  <SpectroInput
+                    title="Оттиск"
+                    conditions={conditions}
+                    onMeasurement={(m) => {
+                      setCurrent(m);
+                      setSaved(false);
+                    }}
+                    onError={onError}
+                  />
+                </section>
+              )}
+            </>
+          )}
           {mode === "one" && (
             <PhotoEditor
               key="one"
@@ -273,28 +353,31 @@ export function Compare({
           <section className="card binding-card">
             <div className="card-heading">
               <h3>
-                <FlaskConical size={19} /> Привязка к партии
+                <FlaskConical size={19} />{" "}
+                {fixedBatchId ? "Сохранение в эту смену" : "Привязка к партии"}
               </h3>
             </div>
-            <Field label="Активная партия">
-              <select
-                aria-label="Активная партия"
-                value={batchId}
-                onChange={(e) => {
-                  setBatchId(e.target.value);
-                  setSaved(false);
-                }}
-              >
-                <option value="">Выберите партию для сохранения</option>
-                {batches
-                  .filter((b) => b.status === "ACTIVE")
-                  .map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name} · {b.pantone || "без Pantone"}
-                    </option>
-                  ))}
-              </select>
-            </Field>
+            {!fixedBatchId && (
+              <Field label="Активная партия">
+                <select
+                  aria-label="Активная партия"
+                  value={batchId}
+                  onChange={(e) => {
+                    setBatchId(e.target.value);
+                    setSaved(false);
+                  }}
+                >
+                  <option value="">Выберите партию для сохранения</option>
+                  {batches
+                    .filter((b) => b.status === "ACTIVE")
+                    .map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} · {b.pantone || "без Pantone"}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            )}
             <Field label="Комментарий к пробе">
               <textarea
                 value={comment}
@@ -404,7 +487,7 @@ export function Compare({
     </>
   );
 }
-function SpectroInput({
+export function SpectroInput({
   title,
   conditions,
   onMeasurement,

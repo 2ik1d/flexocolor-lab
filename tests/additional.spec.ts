@@ -10,7 +10,7 @@ test("два фото, ROI, изменение анализа и недосту�
       value: undefined,
     }),
   );
-  await page.goto(BASE);
+  await page.goto(BASE + "#quick");
   await page.getByRole("button", { name: "Два снимка", exact: true }).click();
   const buffer = await sharp({
     create: { width: 300, height: 300, channels: 3, background: "#75552e" },
@@ -89,7 +89,7 @@ test("профиль повторяемости и пользовательск�
 test("отклонение несовместимых условий Lab и защита импорта", async ({
   page,
 }) => {
-  await page.goto(BASE);
+  await page.goto(BASE + "#quick");
   await page.getByRole("button", { name: "Lab / CSV", exact: true }).click();
   for (const label of ["Эталон", "Оттиск"])
     for (const [coord, value] of [
@@ -127,7 +127,7 @@ test("отклонение несовместимых условий Lab и за
 test("визуальная проверка мобильного и настольного экранов", async ({
   page,
 }, testInfo) => {
-  await page.goto(BASE);
+  await page.goto(BASE + "#quick");
   await expect(
     page.getByRole("heading", { name: "Быстрая приладка." }),
   ).toBeVisible();
@@ -141,9 +141,7 @@ test("визуальная проверка мобильного и настол
     fullPage: true,
   });
   await expect(
-    page
-      .getByRole("navigation")
-      .getByRole("link", { name: "Быстрая приладка" }),
+    page.getByRole("navigation").getByRole("link", { name: "Заказы" }),
   ).toBeVisible();
   expect(
     await page.evaluate(

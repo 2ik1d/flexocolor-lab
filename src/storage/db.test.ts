@@ -83,7 +83,7 @@ it("сохраняет партию, добавки, пробы и восста�
   expect(await d.batches.count()).toBe(1);
   await d.delete();
 });
-it("мигрирует схему v1 → v2", async () => {
+it("мигрирует схему v1 → v3 без потери истории", async () => {
   const name = id(),
     old = new Dexie(name);
   old.version(1).stores({
@@ -103,7 +103,9 @@ it("мигрирует схему v1 → v2", async () => {
   const b = await current.batches.get("legacy");
   expect(b?.status).toBe("ACTIVE");
   expect(b?.samples).toEqual([]);
-  expect(current.verno).toBe(2);
+  expect(current.verno).toBe(3);
+  expect((await current.orders.toArray())[0].name).toBe("Legacy");
+  expect(b?.orderId).toBe("legacy-order-legacy");
   await current.delete();
 });
 it("отвергает повреждённые ссылки и отсутствующие настройки до замены базы", async () => {
@@ -139,5 +141,52 @@ it("отвергает повреждённые ссылки и отсутств
     importData({ ...copy, inks: [...copy.inks, copy.inks[0]] }, d),
   ).rejects.toThrow("ID");
   expect(await d.inks.count()).toBe(9);
+  await d.delete();
+});
+it("восстанавливает копию v2 как отдельные заказы с прежними пробами и эталонами", async () => {
+  const d = new LabDB(id());
+  await seed(d);
+  const copy = await exportData(d);
+  const m: Measurement = {
+    id: "m",
+    createdAt: now(),
+    source: "SPECTRO_LAB",
+    lab: { l: 50, a: 2, b: 4 },
+    conditions: defaultConditions,
+  };
+  const legacy = {
+    ...copy,
+    version: 2,
+    batches: ["first", "second"].map((name) => ({
+      id: name,
+      name,
+      pantone: "185 C",
+      createdAt: now(),
+      initial: [{ inkId: "double-v-0", grams: "1000" }],
+      additions: [],
+      samples: [
+        {
+          id: `sample-${name}`,
+          createdAt: now(),
+          target: m,
+          current: m,
+          components: [{ inkId: "double-v-0", grams: "1000" }],
+          photoIds: [],
+          comment: "",
+        },
+      ],
+      comment: "",
+      status: "ACTIVE",
+    })),
+  };
+  await importData(legacy, d);
+  const orders = await d.orders.toArray();
+  expect(orders).toHaveLength(2);
+  expect(orders[0].references[0].measurement.lab).toEqual(m.lab);
+  expect((await d.batches.get("first"))?.samples).toHaveLength(1);
+  expect((await d.batches.get("first"))?.orderId).not.toBe(
+    (await d.batches.get("second"))?.orderId,
+  );
+  expect((await exportData(d)).version).toBe(3);
   await d.delete();
 });

@@ -104,6 +104,7 @@ export const sampleSchema = z.object({
   current: measurementSchema,
   photoIds: z.array(z.string()),
   additionIds: z.array(z.string()).optional(),
+  referenceId: z.string().optional(),
   components: z.array(componentSchema),
   comment: z.string(),
 });
@@ -123,6 +124,10 @@ export const batchSchema = z.object({
   samples: z.array(sampleSchema),
   comment: z.string(),
   status: z.enum(["ACTIVE", "DONE"]),
+  orderId: z.string().optional(),
+  referenceId: z.string().optional(),
+  runDate: z.string().optional(),
+  shift: z.string().optional(),
   production: z
     .object({
       material: z.string().optional(),
@@ -166,9 +171,27 @@ export const settingsSchema = z.object({
   profileId: z.string(),
   conditions: conditionsSchema,
 });
+export const orderReferenceSchema = z.object({
+  id: z.string().min(1),
+  createdAt: z.string(),
+  name: z.string().min(1),
+  measurement: measurementSchema,
+  photoIds: z.array(z.string()),
+});
+export const orderSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  code: z.string(),
+  customer: z.string(),
+  pantone: z.string(),
+  createdAt: z.string(),
+  notes: z.string(),
+  references: z.array(orderReferenceSchema),
+  currentReferenceId: z.string(),
+});
 export const backupSchema = z.object({
   format: z.literal("FlexoColorLab"),
-  version: z.literal(2),
+  version: z.literal(3),
   exportedAt: z.string(),
   inks: z.array(inkSchema),
   recipes: z.array(recipeSchema),
@@ -177,7 +200,10 @@ export const backupSchema = z.object({
   experiments: z.array(experimentSchema),
   photos: z.array(photoSchema),
   settings: z.array(settingsSchema),
+  orders: z.array(orderSchema),
 });
+export type Order = z.infer<typeof orderSchema>;
+export type OrderReference = z.infer<typeof orderReferenceSchema>;
 export type Component = z.infer<typeof componentSchema>;
 export type Ink = z.infer<typeof inkSchema>;
 export type Recipe = z.infer<typeof recipeSchema>;

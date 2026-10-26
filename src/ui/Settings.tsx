@@ -95,9 +95,9 @@ export function Settings({
               <div className="import-confirm">
                 <h4>Проверка пройдена</h4>
                 <p>
-                  {pending.inks.length} красок · {pending.recipes.length}{" "}
-                  рецептур · {pending.batches.length} партий ·{" "}
-                  {pending.photos.length} фотографий
+                  {pending.orders.length} заказов · {pending.inks.length} красок
+                  · {pending.recipes.length} рецептур · {pending.batches.length}{" "}
+                  партий · {pending.photos.length} фотографий
                 </p>
                 <Notice>
                   Восстановление полностью заменит текущую базу. Сначала
@@ -218,7 +218,7 @@ export function Settings({
               заменяет измерения прибором. Непроверенная модель не выдаёт
               производственные добавки.
             </p>
-            <small>FlexoColor Lab 1.0 · схема данных 2</small>
+            <small>FlexoColor Lab 1.0 · схема данных 3</small>
           </section>
         </aside>
       </div>

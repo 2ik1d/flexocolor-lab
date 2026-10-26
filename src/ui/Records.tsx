@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, ArrowLeft, Beaker, Check, Copy } from "lucide-react";
 import { db, addInk } from "../storage/db";
 import {
@@ -26,14 +26,16 @@ export function Batches({
   batches,
   recipes,
   experiments,
+  fixedBatchId,
   ...props
 }: Shared & {
   batches: Batch[];
   recipes: Recipe[];
   experiments: Experiment[];
+  fixedBatchId?: string;
 }) {
   const [creating, setCreating] = useState(false),
-    [selected, setSelected] = useState(""),
+    [selected, setSelected] = useState(fixedBatchId || ""),
     [name, setName] = useState(""),
     [pantone, setPantone] = useState(""),
     [comment, setComment] = useState(""),
@@ -84,16 +86,22 @@ export function Batches({
     ].sort((a, b) => a.date.localeCompare(b.date));
     return (
       <>
-        <button className="subtle" onClick={() => setSelected("")}>
-          <ArrowLeft size={17} />
-          Все партии
-        </button>
+        {!fixedBatchId && (
+          <button className="subtle" onClick={() => setSelected("")}>
+            <ArrowLeft size={17} />
+            Все партии
+          </button>
+        )}
         <div className="page-heading">
           <div>
             <div className="eyebrow">
               ПАРТИЯ · {batch.status === "ACTIVE" ? "В РАБОТЕ" : "ЗАВЕРШЕНА"}
             </div>
-            <h1>{batch.name}</h1>
+            {fixedBatchId ? (
+              <h3>Состав и история смены</h3>
+            ) : (
+              <h1>{batch.name}</h1>
+            )}
             <p>
               {batch.pantone} · {date(batch.createdAt)}
             </p>
@@ -229,8 +237,8 @@ export function Batches({
             </div>
           </section>
         </div>
-        <section className="card">
-          <h3>Данные экспериментов</h3>
+        <details className="card">
+          <summary>Данные для будущей модели</summary>
           <Notice>
             Данные группируются по условиям, профилю и источнику. Автоматическое
             обучение и выдача добавок пока отключены.
@@ -262,7 +270,7 @@ export function Batches({
                 </label>
               </div>
             ))}
-        </section>
+        </details>
       </>
     );
   }
@@ -374,8 +382,31 @@ export function Batches({
     </>
   );
 }
-function SamplePhotos({ ids }: { ids: string[] }) {
+export function SamplePhotos({
+  ids,
+  autoLoad = false,
+}: {
+  ids: string[];
+  autoLoad?: boolean;
+}) {
   const [urls, setUrls] = useState<string[]>();
+  const key = ids.join("|");
+  useEffect(() => {
+    let active = true;
+    setUrls(undefined);
+    if (autoLoad)
+      void db.photos
+        .bulkGet(ids)
+        .then((photos) => {
+          if (active) setUrls(photos.flatMap((p) => (p ? [p.dataUrl] : [])));
+        })
+        .catch(() => {
+          if (active) setUrls([]);
+        });
+    return () => {
+      active = false;
+    };
+  }, [autoLoad, key]);
   return (
     <div>
       {urls ? (
